@@ -1,0 +1,513 @@
+options:
+  parameters:
+    author: Balraj Minhas
+    catch_exceptions: 'True'
+    category: '[GRC Hier Blocks]'
+    cmake_opt: ''
+    comment: ''
+    copyright: ''
+    description: 'Synthetic complex-baseband packet receiver: acquisition, symbol demodulation, CRC
+      verification, and mitigation'
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: qt_gui
+    hier_block_src_path: '.:'
+    id: Lab4_Chirp_Receiver
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: Robust Chirp Acquisition and Packet Recovery under Interference
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 8
+    rotation: 0
+    state: enabled
+blocks:
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: ''
+    value: '125000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 246
+    - 8
+    rotation: 0
+    state: enabled
+- name: snr_db
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: 0,0,1,1
+    label: Desired-signal SNR (dB)
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '-20'
+    step: '1'
+    stop: '10'
+    value: '-7'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 435
+    - 8
+    rotation: 0
+    state: enabled
+- name: jsr_db
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: 0,1,1,1
+    label: Interference JSR (dB)
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '0'
+    step: '1'
+    stop: '20'
+    value: '10'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 670
+    - 8
+    rotation: 0
+    state: enabled
+- name: kind
+  id: variable_qtgui_chooser
+  parameters:
+    comment: ''
+    gui_hint: 0,2,1,1
+    label: Interference class
+    label0: Barrage
+    label1: Swept
+    label2: Pulsed
+    label3: Event-triggered
+    label4: ''
+    labels: '[]'
+    num_opts: '4'
+    option0: '0'
+    option1: '1'
+    option2: '2'
+    option3: '3'
+    option4: '4'
+    options: '[0,1,2,3]'
+    orient: Qt.QVBoxLayout
+    type: int
+    value: '2'
+    widget: combo_box
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 940
+    - 8
+    rotation: 0
+    state: enabled
+- name: epy_block_0
+  id: epy_block
+  parameters:
+    _source_code: "#!/usr/bin/env python3\n\"\"\"Reproducible complex-baseband chirp receiver and\
+      \ interference experiments.\n\nSignal model: 128-sample quadratic chirps, four-chirp known\
+      \ preamble,\n12 chirp-encoded payload symbols, 9 data bytes and a CRC-8. This is a\nlaboratory\
+      \ framing convention, not a full LoRa PHY. No real RF is emitted.\n\"\"\"\nfrom __future__\
+      \ import annotations\nimport argparse\nimport csv\nfrom pathlib import Path\nimport numpy as\
+      \ np\nfrom scipy.signal import correlate\n\ntry:\n    from gnuradio import gr\nexcept ImportError:\n\
+      \    class _GR:\n        class sync_block:\n            def __init__(self,*a,**kw): pass\n\
+      \    gr = _GR()\n\nN = 128\nFS = 125_000.0\nPRE = 4\nPAY_SYMBOLS = 12\nDATA_BYTES = 9\nPAY_BITS\
+      \ = 8*(DATA_BYTES+1)\nFRAME = (PRE+PAY_SYMBOLS)*N\nOBS = FRAME+192\nSEARCH = OBS-FRAME+1\n\
+      SNR_DB = -7.0\nSEEDS=(2026,2027,2028)\nJSR_LEVELS=(0.,5.,10.,15.)\nKINDS=('barrage','sweep','pulsed','event_triggered')\n\
+      METHODS=('raw','blank','spectral','hybrid')\nTOL=2\nW=64\n# Thresholds are defined before the\
+      \ simulation and held fixed for all cases.\nBLANK_MULT=2.7\nSPECTRAL_RATIO=14.0\nSPECTRAL_FRACTION=.18\n\
+      \nn=np.arange(N)\nUP=np.exp(1j*np.pi*(n*n/N-n))\nPREAMBLE=np.tile(UP, PRE)\nTONE_BANK=np.exp(2j*np.pi*np.outer(np.arange(N),n)/N)\n\
+      \n\ndef cn(rng, count):\n    return (rng.standard_normal(count)+1j*rng.standard_normal(count))/np.sqrt(2)\n\
+      \n\ndef crc8(data):\n    \"\"\"CRC-8, polynomial 0x07, init=0, MSB-first, no reflection or\
+      \ xor-out.\"\"\"\n    crc=0\n    for byte in data:\n        crc ^= int(byte)\n        for _\
+      \ in range(8):\n            crc=((crc<<1)^ (7 if (crc&128) else 0))&255\n    return crc\n\n\
+      \ndef frame_from_bytes(data):\n    b=np.asarray(data,dtype=np.uint8)\n    if b.size != DATA_BYTES:raise\
+      \ ValueError('expected 9 payload bytes')\n    packet=np.r_[b, np.uint8(crc8(b))]\n    bit_stream=np.unpackbits(packet)\n\
+      \    padded=np.pad(bit_stream,(0, PAY_SYMBOLS*7-PAY_BITS))\n    values=padded.reshape(PAY_SYMBOLS,7)@np.array([64,32,16,8,4,2,1])\n\
+      \    payload=np.concatenate([UP*TONE_BANK[int(k)] for k in values])\n    return np.r_[PREAMBLE,payload],packet,values\n\
+      \n\ndef make_record(rng, snr_db=SNR_DB, present=True):\n    tau=int(rng.integers(32,161))\n\
+      \    data=rng.integers(0,256,DATA_BYTES,dtype=np.uint8)\n    tx,packet,values=frame_from_bytes(data)\n\
+      \    x=np.sqrt(10**(-snr_db/10))*cn(rng,OBS)\n    if present:\n        x[tau:tau+FRAME]+=tx*np.exp(1j*rng.uniform(-np.pi,np.pi))\n\
+      \    return x,tau,packet,values\n\n\ndef make_interference(rng,kind,tau=None):\n    \"\"\"\
+      One record-normalized waveform. Triggered case has simulator-known onset.\"\"\"\n    if kind=='none':return\
+      \ np.zeros(OBS,complex)\n    ix=np.arange(OBS,dtype=float)\n    if kind=='barrage': j=cn(rng,OBS)\n\
+      \    elif kind=='sweep':\n        f0=rng.uniform(-.34,-.26)\n        f1=rng.uniform(.26,.34)\n\
+      \        slope=(f1-f0)/(OBS-1)\n        j=np.exp(2j*np.pi*(f0*ix+0.5*slope*ix*ix)+1j*rng.uniform(0,2*np.pi))\n\
+      \    elif kind=='pulsed':\n        j=np.zeros(OBS,complex)\n        duration=int(.20*OBS)\n\
+      \        onset=int(rng.integers(0,OBS-duration+1))\n        j[onset:onset+duration]=cn(rng,duration)\n\
+      \    elif kind=='event_triggered':\n        j=np.zeros(OBS,complex)\n        if tau is None:return\
+      \ j\n        onset=int(tau+N//2)\n        duration=3*N\n        j[onset:onset+duration]=cn(rng,duration)\n\
+      \    else:raise ValueError(kind)\n    p=np.mean(np.abs(j)**2)\n    return j/np.sqrt(p) if p>0\
+      \ else j\n\n\ndef mitigate(x, method):\n    x=np.asarray(x,dtype=np.complex128)\n    if method\
+      \ not in METHODS:raise ValueError(method)\n    if method=='raw':return x.copy(),dict(blanked=0,excised=0)\n\
+      \    y=x.copy()\n    blanked=0; excised=0\n    if method in ('blank','hybrid'):\n        amp=np.abs(y)\n\
+      \        limit=BLANK_MULT*np.median(amp)\n        mask=amp>limit\n        blanked=int(np.count_nonzero(mask))\n\
+      \        y[mask]=0\n    if method in ('spectral','hybrid'):\n        assert y.size%W==0\n \
+      \       Y=np.fft.fft(y.reshape(-1,W),axis=1)\n        power=np.abs(Y)**2\n        med=np.median(power,axis=1)\n\
+      \        maxbin=np.argmax(power,axis=1)\n        peak=power[np.arange(power.shape[0]),maxbin]\n\
+      \        flag=(peak>SPECTRAL_RATIO*np.maximum(med,1e-12)) & (peak>SPECTRAL_FRACTION*np.sum(power,axis=1))\n\
+      \        for row, k in enumerate(maxbin):\n            if flag[row]:\n                Y[row,\
+      \ np.array([k-1,k,k+1])%W]=0\n                excised+=3\n        y=np.fft.ifft(Y,axis=1).ravel()\n\
+      \    return y, dict(blanked=blanked,excised=excised)\n\n\ndef match_statistic(x):\n    \"\"\
+      \"Normalized known-preamble matched filter, all admissible packet onsets.\"\"\"\n    c=correlate(x,PREAMBLE,mode='valid',method='fft')[:SEARCH]\n\
+      \    en=np.r_[0,np.cumsum(np.abs(x)**2)]\n    power=(en[PRE*N:PRE*N+SEARCH]-en[:SEARCH])\n\
+      \    return (np.abs(c)**2/(PRE*N*np.maximum(power,1e-12)))\n\n\ndef acquire(x,threshold):\n\
+      \    stat=match_statistic(x)\n    t=int(np.argmax(stat))\n    v=float(stat[t])\n    return\
+      \ (t if v>threshold else -1),v\n\n\ndef decode(x,start):\n    if start<0 or start+FRAME>len(x):return\
+      \ None,None,False\n    begin=start+PRE*N\n    chunks=x[begin:begin+PAY_SYMBOLS*N].reshape(PAY_SYMBOLS,N)\n\
+      \    spec=np.fft.fft(chunks*np.conj(UP),axis=1)\n    syms=np.argmax(np.abs(spec)**2,axis=1)\n\
+      \    bits=((syms[:,None]>>np.arange(6,-1,-1))&1).astype(np.uint8).ravel()[:PAY_BITS]\n    decoded=np.packbits(bits)\n\
+      \    crc_ok=bool(crc8(decoded[:-1])==int(decoded[-1]))\n    return decoded,syms,crc_ok\n\n\n\
+      def calibrate(ntrials=1200,seed=44123,pfa=.01):\n    rng=np.random.default_rng(seed)\n    values={m:np.empty(ntrials)\
+      \ for m in METHODS}\n    for i in range(ntrials):\n        x,_,_,_=make_record(rng,present=False)\n\
+      \        for m in METHODS:\n            y,_=mitigate(x,m)\n            values[m][i]=np.max(match_statistic(y))\n\
+      \    return {m:float(np.quantile(values[m],1-pfa)) for m in METHODS}\n\n\ndef process(x,method,threshold):\n\
+      \    y,stats=mitigate(x,method)\n    t,peak=acquire(y,threshold)\n    decoded,syms,crc_ok=decode(y,t)\n\
+      \    return dict(start=t,peak=peak,decoded=decoded,crc_ok=crc_ok,**stats)\n\n\ndef simulate(seed,kind,jsr_db,thresholds,nframes=160,nh0=35,snr_db=SNR_DB):\n\
+      \    rng=np.random.default_rng(int(seed))\n    entries=[]\n    records={m:dict(correct=0,miss=0,false_lock=0,packet_ok=0,crc_ok=0,crc_false_accept=0,\n\
+      \        bit_errors=0,bit_trials=0,timing=[],peaks=[],blanked=[],excised=[],false_alarm=0)\
+      \ for m in METHODS}\n    for k in range(nframes):\n        clean,tau,packet,_=make_record(rng,snr_db=snr_db)\n\
+      \        jammer=make_interference(rng,kind,tau)\n        x=clean+np.sqrt(10**(jsr_db/10))*jammer\
+      \ if kind!='none' else clean\n        for m in METHODS:\n            r=process(x,m,thresholds[m]);s=records[m]\n\
+      \            correct=r['start']>=0 and abs(r['start']-tau)<=TOL\n            if r['start']<0:s['miss']+=1\n\
+      \            elif correct:s['correct']+=1;s['timing'].append(abs(r['start']-tau))\n       \
+      \     else:s['false_lock']+=1\n            errors=''\n            is_good=False\n         \
+      \   if correct and r['decoded'] is not None:\n                errors=int(np.count_nonzero(np.unpackbits(r['decoded'])[:DATA_BYTES*8]\
+      \ != np.unpackbits(packet)[:DATA_BYTES*8]))\n                s['bit_errors']+=errors;s['bit_trials']+=DATA_BYTES*8\n\
+      \                is_good=bool(errors==0 and r['crc_ok'])\n            if r['crc_ok']:\n   \
+      \             s['crc_ok']+=1\n                if not is_good:s['crc_false_accept']+=1\n   \
+      \         if is_good:s['packet_ok']+=1\n            s['peaks'].append(r['peak']);s['blanked'].append(r['blanked']);s['excised'].append(r['excised'])\n\
+      \            entries.append(dict(seed=seed,kind=kind,jsr_db=('' if kind=='none' else jsr_db),\n\
+      \               frame=k,method=m,true_start=tau,estimated_start=r['start'],\n             \
+      \  outcome='correct' if correct else ('miss' if r['start']<0 else 'false_lock'),\n        \
+      \       payload_bit_errors=errors,crc_ok=int(r['crc_ok']),packet_ok=int(is_good),\n       \
+      \        peak=r['peak'],blanked_samples=r['blanked'],excised_bins=r['excised']))\n    # Separate\
+      \ H0 realizations: no payload and no preamble. Triggered interference is silent.\n    for _\
+      \ in range(nh0):\n        null,_,_,_=make_record(rng,snr_db=snr_db,present=False)\n       \
+      \ j=make_interference(rng,kind,None)\n        if kind!='none':null=null+np.sqrt(10**(jsr_db/10))*j\n\
+      \        for m in METHODS:\n            r=process(null,m,thresholds[m])\n            records[m]['false_alarm']+=int(r['start']>=0)\n\
+      \    rows=[]\n    for m,r in records.items():\n        rows.append(dict(seed=seed,kind=kind,jsr_db=(''\
+      \ if kind=='none' else jsr_db),snr_db=snr_db,\n             method=m,frames=nframes,absent_trials=nh0,correct=r['correct'],miss=r['miss'],false_lock=r['false_lock'],\n\
+      \             packet_ok=r['packet_ok'],crc_ok=r['crc_ok'],crc_false_accept=r['crc_false_accept'],\n\
+      \             bit_errors_on_correct_locks=r['bit_errors'],bit_trials_on_correct_locks=r['bit_trials'],\n\
+      \             false_alarms=r['false_alarm'],p_correct=r['correct']/nframes,\n             p_false_lock=r['false_lock']/nframes,p_packet=r['packet_ok']/nframes,\n\
+      \             ber_given_correct_lock=r['bit_errors']/r['bit_trials'] if r['bit_trials'] else\
+      \ '',\n             pfa_h0=r['false_alarm']/nh0,mean_abs_timing_given_correct=float(np.mean(r['timing']))\
+      \ if r['timing'] else '',\n             mean_peak=float(np.mean(r['peaks'])),mean_blanked=float(np.mean(r['blanked'])),\n\
+      \             mean_excised_bins=float(np.mean(r['excised']))))\n    return entries, rows\n\n\
+      \ndef write_csv(path,rows):\n    if not rows:return\n    with Path(path).open('w',newline='')\
+      \ as f:\n        w=csv.DictWriter(f,fieldnames=list(rows[0]));w.writeheader();w.writerows(rows)\n\
+      \n\ndef experiment(out,nframes=160,nh0=35,seeds=SEEDS,calibration=1200):\n    dest=Path(out);dest.mkdir(exist_ok=True,parents=True)\n\
+      \    thresholds=calibrate(ntrials=calibration)\n    plan=[('none',0.)]+[(k,jsr) for k in KINDS\
+      \ for jsr in JSR_LEVELS]\n    all_details=[];summary=[]\n    for seed in seeds:\n        for\
+      \ kind,jsr in plan:\n            detail,aggregate=simulate(seed,kind,jsr,thresholds,nframes,nh0)\n\
+      \            all_details+=detail;summary+=aggregate\n            print('seed',seed,'condition',kind,jsr,'packet\
+      \ ok',[(r['method'],r['packet_ok']) for r in aggregate],flush=True)\n    write_csv(dest/'Lab4_receiver_results.csv',summary)\n\
+      \    write_csv(dest/'Lab4_packet_trials.csv',all_details)\n    write_csv(dest/'Lab4_thresholds.csv',[dict(method=m,threshold=thresholds[m],noise_only_trials=calibration,\n\
+      \       target_pfa=.01,seed=44123) for m in METHODS])\n    return summary\n\n\nclass blk(gr.sync_block):\n\
+      \    \"\"\"Display one paired synthetic frame and the four end-to-end CRC outcomes.\"\"\"\n\
+      \    def __init__(self,snr_db=-7.,jsr_db=10.,kind=2,seed=2026):\n        gr.sync_block.__init__(self,name='Chirp\
+      \ Packet Receiver',in_sig=None,\n            out_sig=[np.complex64,np.float32,np.float32,np.float32,np.float32,np.float32])\n\
+      \        self.rng=np.random.default_rng(int(seed));self.snr_db=float(snr_db);self.jsr_db=float(jsr_db)\n\
+      \        self.kind=int(kind)%4\n        self.thresholds=calibrate(ntrials=500)\n        self.samples=np.zeros(OBS,np.complex64);self.val=np.zeros(5,np.float32);self.offset=OBS\n\
+      \    def new_frame(self):\n        clean,tau,packet,_=make_record(self.rng,self.snr_db)\n \
+      \       j=make_interference(self.rng,KINDS[self.kind],tau)\n        x=clean+np.sqrt(10**(self.jsr_db/10))*j\n\
+      \        flags=[]\n        for m in METHODS:\n            r=process(x,m,self.thresholds[m])\n\
+      \            good=r['start']>=0 and abs(r['start']-tau)<=TOL and r['decoded'] is not None and\
+      \ np.array_equal(r['decoded'],packet)\n            flags.append(float(good))\n        self.samples=x.astype(np.complex64);self.val=np.array([float(tau),*flags],dtype=np.float32)\n\
+      \        self.offset=0\n    def work(self,input_items,output_items):\n        todo=len(output_items[0]);done=0\n\
+      \        while done<todo:\n            if self.offset>=OBS:self.new_frame()\n            take=min(todo-done,OBS-self.offset)\n\
+      \            output_items[0][done:done+take]=self.samples[self.offset:self.offset+take]\n \
+      \           for m in range(5):output_items[m+1][done:done+take]=self.val[m]\n            self.offset+=take;done+=take\n\
+      \        return todo\n\nif __name__=='__main__':\n    parser=argparse.ArgumentParser(description='End-to-end\
+      \ simulated chirp receiver under interference')\n    parser.add_argument('--out',default='results')\n\
+      \    parser.add_argument('--frames',type=int,default=160)\n    parser.add_argument('--h0',type=int,default=35)\n\
+      \    parser.add_argument('--calibration',type=int,default=1200)\n    parser.add_argument('--seeds',nargs='+',type=int,default=list(SEEDS))\n\
+      \    args=parser.parse_args()\n    experiment(args.out,args.frames,args.h0,args.seeds,args.calibration)\n"
+    affinity: ''
+    alias: ''
+    comment: ''
+    minoutbuf: '0'
+    maxoutbuf: '0'
+    snr_db: snr_db
+    jsr_db: jsr_db
+    kind: kind
+    seed: '2026'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 195
+    - 300
+    rotation: 0
+    state: enabled
+- name: qtgui_waterfall_sink_x_0
+  id: qtgui_waterfall_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    axislabels: 'True'
+    bw: samp_rate
+    color1: '0'
+    color10: '0'
+    color2: '0'
+    color3: '0'
+    color4: '0'
+    color5: '0'
+    color6: '0'
+    color7: '0'
+    color8: '0'
+    color9: '0'
+    comment: ''
+    fc: '0'
+    fftsize: '1024'
+    freqhalf: 'True'
+    grid: 'True'
+    gui_hint: 1,2,2,2
+    int_max: '20'
+    int_min: '-80'
+    label1: ''
+    label10: ''
+    label2: ''
+    label3: ''
+    label4: ''
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    legend: 'True'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: Received chirp signal waterfall
+    nconnections: '1'
+    showports: 'False'
+    type: complex
+    update_time: '0.20'
+    wintype: window.WIN_BLACKMAN_hARRIS
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 690
+    - 245
+    rotation: 0
+    state: enabled
+- name: qtgui_freq_sink_x_0
+  id: qtgui_freq_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    average: '0.2'
+    axislabels: 'True'
+    bw: samp_rate
+    color1: '"blue"'
+    color10: '"dark blue"'
+    color2: '"red"'
+    color3: '"green"'
+    color4: '"black"'
+    color5: '"cyan"'
+    color6: '"magenta"'
+    color7: '"yellow"'
+    color8: '"dark red"'
+    color9: '"dark green"'
+    comment: ''
+    ctrlpanel: 'False'
+    fc: '0'
+    fftsize: '1024'
+    freqhalf: 'True'
+    grid: 'True'
+    gui_hint: 1,0,2,2
+    label: Relative Gain
+    label1: Received IQ
+    label10: ''''''
+    label2: ''
+    label3: ''''''
+    label4: ''''''
+    label5: ''''''
+    label6: ''''''
+    label7: ''''''
+    label8: ''''''
+    label9: ''''''
+    legend: 'True'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: Received chirp signal spectrum
+    nconnections: '1'
+    norm_window: 'False'
+    showports: 'False'
+    tr_chan: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_tag: '""'
+    type: complex
+    units: dB
+    update_time: '0.20'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    wintype: window.WIN_BLACKMAN_hARRIS
+    ymax: '20'
+    ymin: '-80'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 690
+    - 420
+    rotation: 0
+    state: enabled
+- name: qtgui_number_sink_0
+  id: qtgui_number_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    autoscale: 'True'
+    avg: '0'
+    color1: ("black", "black")
+    color10: ("black", "black")
+    color2: ("black", "black")
+    color3: ("black", "black")
+    color4: ("black", "black")
+    color5: ("blue", "red")
+    color6: ("black", "black")
+    color7: ("black", "black")
+    color8: ("black", "black")
+    color9: ("black", "black")
+    comment: ''
+    factor1: '1'
+    factor10: '1'
+    factor2: '1'
+    factor3: '1'
+    factor4: '1'
+    factor5: '1'
+    factor6: '1'
+    factor7: '1'
+    factor8: '1'
+    factor9: '1'
+    graph_type: qtgui.NUM_GRAPH_NONE
+    gui_hint: 3,0,1,4
+    label1: True onset (sample)
+    label10: ''
+    label2: 'Unmodified: valid packet'
+    label3: 'Blanking: valid packet'
+    label4: 'Spectral: valid packet'
+    label5: 'Combined: valid packet'
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    max: '1'
+    min: '-1'
+    name: Recovered packet outcomes (0/1)
+    nconnections: '5'
+    type: float
+    unit1: ''
+    unit10: ''
+    unit2: ''
+    unit3: ''
+    unit4: ''
+    unit5: ''
+    unit6: ''
+    unit7: ''
+    unit8: ''
+    unit9: ''
+    update_time: '0.25'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 695
+    - 620
+    rotation: 0
+    state: enabled
+connections:
+- - epy_block_0
+  - '0'
+  - qtgui_freq_sink_x_0
+  - '0'
+- - epy_block_0
+  - '0'
+  - qtgui_waterfall_sink_x_0
+  - '0'
+- - epy_block_0
+  - '1'
+  - qtgui_number_sink_0
+  - '0'
+- - epy_block_0
+  - '2'
+  - qtgui_number_sink_0
+  - '1'
+- - epy_block_0
+  - '3'
+  - qtgui_number_sink_0
+  - '2'
+- - epy_block_0
+  - '4'
+  - qtgui_number_sink_0
+  - '3'
+- - epy_block_0
+  - '5'
+  - qtgui_number_sink_0
+  - '4'
+metadata:
+  file_format: 1
+  grc_version: 3.10.9.2

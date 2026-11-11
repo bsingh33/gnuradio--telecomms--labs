@@ -1,0 +1,477 @@
+options:
+  parameters:
+    author: Balraj Minhas
+    catch_exceptions: 'True'
+    category: '[GRC Hier Blocks]'
+    cmake_opt: ''
+    comment: ''
+    copyright: ''
+    description: 2x2 spatial multiplexing, correlated Rayleigh fading, pilot LS CSI, ZF/MMSE/MMSE-SIC
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: qt_gui
+    hier_block_src_path: '.:'
+    id: Lab2_MIMO_OFDM
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: 2x2 MIMO-OFDM Detection under Channel Correlation and Estimation Error
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 8
+    rotation: 0
+    state: enabled
+blocks:
+- name: snr_db
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: 0,0,1,1
+    label: Data Es/N0 (dB)
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '0'
+    step: '1'
+    stop: '24'
+    value: '12'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 304
+    - 8.0
+    rotation: 0
+    state: enabled
+- name: rho
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: 0,1,1,1
+    label: Spatial correlation rho
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '0'
+    step: '0.05'
+    stop: '0.95'
+    value: '0.6'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 440
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: pilot_snr_db
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: 0,2,1,1
+    label: Pilot Es/N0 (dB)
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '0'
+    step: '2'
+    stop: '30'
+    value: '20'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 624
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: epy_block_0
+  id: epy_block
+  parameters:
+    _source_code: "#!/usr/bin/env python3\n\"\"\"2x2 spatial-multiplexing MIMO-OFDM: ZF, MMSE, and\
+      \ ordered MMSE-SIC.\n\nThis module is both the GNU Radio Embedded Python Block source and a\
+      \ standalone\nreproducibility entry point. The study uses no external radio hardware.\n\"\"\
+      \"\nfrom __future__ import annotations\nimport argparse\nimport csv\nfrom pathlib import Path\n\
+      import numpy as np\n\ntry:\n    from gnuradio import gr\nexcept ImportError:  # Headless reproducibility\
+      \ does not require GNU Radio.\n    class _HeadlessGR:\n        class sync_block:\n        \
+      \    def __init__(self, *args, **kwargs):\n                pass\n    gr = _HeadlessGR()\n\n\
+      NFFT, CP, NT, NR, L = 64, 16, 2, 2, 6\nACTIVE = np.r_[np.arange(1, 27), np.arange(38, 64)]\n\
+      NC = len(ACTIVE)\nBITS_PER_FRAME = NC * NT * 2\nPDP = np.exp(-np.arange(L, dtype=float) / 1.5)\n\
+      PDP /= PDP.sum()\nDET = ('ZF', 'MMSE', 'MMSE-SIC')\n\n\ndef cn(rng, shape):\n    return (rng.standard_normal(shape)\
+      \ + 1j * rng.standard_normal(shape)) / np.sqrt(2.0)\n\n\ndef qpsk(bits):\n    return ((1.0\
+      \ - 2.0 * bits[..., 0]) + 1j * (1.0 - 2.0 * bits[..., 1])) / np.sqrt(2.0)\n\n\ndef hard_bits(z):\n\
+      \    return np.stack((np.real(z) < 0.0, np.imag(z) < 0.0), axis=-1).astype(np.uint8)\n\n\n\
+      def slicer(z):\n    return qpsk(hard_bits(z))\n\n\ndef correlation_root(rho):\n    # Symmetric\
+      \ positive-definite matrix sqrt of [[1,rho],[rho,1]].\n    a = (np.sqrt(1.0 + rho) + np.sqrt(1.0\
+      \ - rho)) / 2.0\n    b = (np.sqrt(1.0 + rho) - np.sqrt(1.0 - rho)) / 2.0\n    return np.array([[a,\
+      \ b], [b, a]])\n\n\ndef channel_taps(rng, nframes, rho):\n    if not (0.0 <= rho < 1.0):\n\
+      \        raise ValueError('rho must lie in [0, 1)')\n    w = cn(rng, (nframes, NR, NT, L))\n\
+      \    r = correlation_root(rho)\n    taps = np.einsum('ri,bijl,jt->brtl', r, w, r, optimize=True)\n\
+      \    taps *= np.sqrt(PDP)[None, None, None, :]\n    return taps\n\n\ndef channel_freq(taps):\n\
+      \    return np.transpose(np.fft.fft(taps, n=NFFT, axis=-1)[..., ACTIVE], (0, 3, 1, 2))\n\n\n\
+      def time_channel(x_freq, taps, noise_var, rng):\n    \"\"\"Unitary IFFT, CP, linear convolution,\
+      \ time-domain noise, CP removal, FFT.\n\n    x_freq: (frame, tx, tone); taps: (frame, rx, tx,\
+      \ delay)\n    output: (frame, active_tone, rx), received CP-free time samples (frame,rx,64)\n\
+      \    \"\"\"\n    x = np.fft.ifft(x_freq, axis=-1, norm='ortho')\n    xcp = np.concatenate((x[...,\
+      \ -CP:], x), axis=-1)\n    y = np.zeros((len(x), NR, NFFT + CP), dtype=np.complex128)\n   \
+      \ for ell in range(L):\n        y[..., ell:] += np.einsum('brt,bts->brs', taps[..., ell], xcp[...,\
+      \ :NFFT+CP-ell], optimize=True)\n    y += np.sqrt(noise_var) * cn(rng, y.shape)\n    useful\
+      \ = y[..., CP:]\n    yf = np.fft.fft(useful, axis=-1, norm='ortho')\n    return np.transpose(yf[...,\
+      \ ACTIVE], (0, 2, 1)), useful\n\n\ndef solve_detectors(h_est, y, noise_var):\n    \"\"\"Vectorized\
+      \ matched linear detectors and ordered MMSE-SIC.\n\n    All three detectors receive the *same*\
+      \ tone-level y and estimated H.\n    MMSE-SIC first detects the stream with the smaller estimated\
+      \ MMSE error\n    covariance diagonal; the remaining stream is detected after cancellation.\n\
+      \    \"\"\"\n    h = h_est.reshape(-1, NR, NT)\n    y = y.reshape(-1, NR)\n    n = len(h)\n\
+      \    hh = h.conj().swapaxes(1, 2)\n    gram = hh @ h\n    rhs = (hh @ y[..., None])[..., 0]\n\
+      \    eye = np.eye(NT, dtype=np.complex128)[None, :, :]\n    zf = np.linalg.solve(gram, rhs[...,\
+      \ None])[..., 0]\n    reg = gram + noise_var * eye\n    # First right-hand side gives MMSE\
+      \ estimate, other two give covariance\n    # geometry for stream ordering (single 2x2 factorization\
+      \ per tone).\n    rhs3 = np.concatenate((rhs[..., None], np.broadcast_to(eye, (n, NT, NT))),\
+      \ axis=-1)\n    sol = np.linalg.solve(reg, rhs3)\n    mmse = sol[..., 0]\n    inv_reg = sol[...,\
+      \ 1:]\n    order = np.argmin(np.real(np.diagonal(inv_reg, axis1=1, axis2=2)), axis=1)\n   \
+      \ other = 1 - order\n    row = np.arange(n)\n    first_hard = slicer(mmse[row, order])\n  \
+      \  residual = y - h[row, :, order] * first_hard[:, None]\n    h_other = h[row, :, other]\n\
+      \    second_soft = np.sum(h_other.conj() * residual, axis=1) / (\n        np.sum(np.abs(h_other)**2,\
+      \ axis=1) + noise_var\n    )\n    sic = np.empty((n, NT), dtype=np.complex128)\n    sic[row,\
+      \ order] = first_hard\n    sic[row, other] = slicer(second_soft)\n    shape = h_est.shape[:-2]\
+      \ + (NT,)\n    return {'ZF': zf.reshape(shape), 'MMSE': mmse.reshape(shape), 'MMSE-SIC': sic.reshape(shape)}\n\
+      \n\ndef generate_batch(rng, count, snr_db, rho, pilot_snr_db=None, pilot_rng=None):\n    esn0\
+      \ = 10.0**(snr_db/10.0)\n    n0 = 1.0/esn0\n    taps = channel_taps(rng, count, rho)\n    h_true\
+      \ = channel_freq(taps)\n    bits = rng.integers(0, 2, size=(count, NT, NC, 2), dtype=np.uint8)\n\
+      \    symbols = qpsk(bits)\n    x_freq = np.zeros((count, NT, NFFT), dtype=np.complex128)\n\
+      \    x_freq[:, :, ACTIVE] = symbols\n    y, rx_useful = time_channel(x_freq, taps, n0, rng)\n\
+      \    if pilot_snr_db is None:\n        h_est = h_true.copy()\n    else:\n        if pilot_rng\
+      \ is None:\n            pilot_rng = rng\n        p0 = np.zeros_like(x_freq)\n        p1 = np.zeros_like(x_freq)\n\
+      \        p0[:, 0, ACTIVE] = 1.0\n        p1[:, 1, ACTIVE] = 1.0\n        n0_pilot = 10.0**(-pilot_snr_db/10.0)\n\
+      \        y0, _ = time_channel(p0, taps, n0_pilot, pilot_rng)\n        y1, _ = time_channel(p1,\
+      \ taps, n0_pilot, pilot_rng)\n        h_est = np.stack((y0, y1), axis=-1)\n    # Output data\
+      \ arranged (frame, tone, stream, bit).\n    truth = np.transpose(bits, (0,2,1,3))\n    tx_syms\
+      \ = np.transpose(symbols, (0,2,1))\n    return truth, tx_syms, y, h_true, h_est, rx_useful,\
+      \ n0\n\n\ndef experiment_plan():\n    plan = []\n    for snr in [0, 4, 8, 12, 16, 20]:\n  \
+      \      plan.append(('snr', float(snr), 0.3, None, 1001))\n    for rho in [0.0, 0.3, 0.6, 0.8,\
+      \ 0.95]:\n        plan.append(('correlation', 12.0, rho, None, 2002))\n    for p in [None,\
+      \ 8.0, 14.0, 20.0, 26.0]:\n        plan.append(('estimation', 12.0, 0.6, p, 3003))\n    for\
+      \ rho in [0.0, 0.6, 0.9]:\n        for p in [12.0, 24.0]:\n            plan.append(('joint',\
+      \ 12.0, rho, p, 4004))\n    return plan\n\n\nCONDITION_EDGES = np.array([1., 2., 4., 8., 16.,\
+      \ np.inf])\nCONDITION_LABELS = ('[1,2)', '[2,4)', '[4,8)', '[8,16)', '[16,inf)')\n\n\ndef run_point(experiment,\
+      \ snr_db, rho, pilot_snr_db, seed, frames=800,\n              batch=100, capture=False):\n\
+      \    bit_errors = {d:0 for d in DET}\n    bit_errors_by_bin = {d:np.zeros(5,dtype=np.int64)\
+      \ for d in DET}\n    n_by_bin = np.zeros(5, dtype=np.int64)\n    frame_bit_errors = {d:[] for\
+      \ d in DET}\n    frame_bin_bit_errors = {d:[[] for _ in range(5)] for d in DET}\n    frame_bin_bits\
+      \ = [[] for _ in range(5)]\n    nmse_numerator = 0.0\n    nmse_denominator = 0.0\n    conditions\
+      \ = []\n    enhancements = []\n    first_capture = None\n    for start in range(0, frames,\
+      \ batch):\n        count = min(batch, frames-start)\n        # Keep data, channel and data\
+      \ noise identical across conditions within\n        # each sweep; pilots have an independent\
+      \ random stream.\n        data_rng = np.random.default_rng(np.random.SeedSequence([seed, start,\
+      \ 0]))\n        pilot_rng = np.random.default_rng(np.random.SeedSequence([seed, start, 1]))\n\
+      \        truth, tx, y, ht, he, waveform, n0 = generate_batch(\n            data_rng, count,\
+      \ snr_db, rho, pilot_snr_db, pilot_rng\n        )\n        nmse_numerator += float(np.sum(np.abs(ht-he)**2))\n\
+      \        nmse_denominator += float(np.sum(np.abs(ht)**2))\n        singular = np.linalg.svd(ht.reshape(-1,\
+      \ 2, 2), compute_uv=False)\n        cond = singular[:,0] / singular[:,1]\n        conditions.append(cond)\n\
+      \        enhancements.append((1/singular[:,0]**2+1/singular[:,1]**2)/2.0)\n        got = solve_detectors(he,y,n0)\n\
+      \        bi = np.searchsorted(CONDITION_EDGES[1:], cond, side='right')\n        counts = np.bincount(bi,\
+      \ minlength=5)\n        n_by_bin += counts * NT * 2\n        label_matrix=bi.reshape(count,\
+      \ NC)\n        for k in range(5):\n            frame_bin_bits[k].extend((NT*2*np.sum(label_matrix==k,axis=1)).tolist())\n\
+      \        for d in DET:\n            errors = np.count_nonzero(hard_bits(got[d]) != truth, axis=(2,3))\n\
+      \            bit_errors[d] += int(errors.sum())\n            frame_bit_errors[d].extend(errors.sum(axis=1).astype(int).tolist())\n\
+      \            for k in range(5):\n                frame_bin_bit_errors[d][k].extend(\n     \
+      \               np.sum(errors*(label_matrix==k),axis=1).astype(int).tolist())\n           \
+      \ bit_errors_by_bin[d] += np.bincount(bi, weights=errors.reshape(-1),minlength=5).astype(np.int64)\n\
+      \        if capture and first_capture is None:\n            keep = min(count, 80)\n       \
+      \     first_capture = dict(tx=tx[:keep].copy(), y=y[:keep].copy(),\n                      \
+      \           zf=got['ZF'][:keep].copy(), mmse=got['MMSE'][:keep].copy(),\n                 \
+      \                sic=got['MMSE-SIC'][:keep].copy(),\n                                 h_true=ht[:keep].copy(),\
+      \ h_est=he[:keep].copy(),\n                                 waveform=waveform[:keep].copy())\n\
+      \    condall = np.concatenate(conditions)\n    enhall = np.concatenate(enhancements)\n    nmse\
+      \ = nmse_numerator / nmse_denominator\n    total_bits = frames * BITS_PER_FRAME\n    # Bootstrap\
+      \ whole OFDM frames, not individual bits; tone errors within a\n    # frame share a frequency-selective\
+      \ channel and are not independent.\n    rng_ci = np.random.default_rng(np.random.SeedSequence([seed,\
+      \ 991]))\n    sample_indices = rng_ci.integers(0, frames, size=(800, frames))\n    rows = []\n\
+      \    for d in DET:\n        errors = bit_errors[d]\n        frame_err=np.asarray(frame_bit_errors[d],dtype=int)\n\
+      \        distribution=frame_err[sample_indices].sum(axis=1)/total_bits\n        lo,hi = np.quantile(distribution,[.025,.975])\n\
+      \        rows.append(dict(experiment=experiment, snr_db=snr_db, rho=rho,\n                \
+      \ pilot_snr_db='perfect' if pilot_snr_db is None else pilot_snr_db,\n                 detector=d,\
+      \ frames=frames, bits=total_bits, bit_errors=errors,\n                 ber=errors/total_bits,\
+      \ ci95_low=lo, ci95_high=hi, nmse=nmse,\n                 median_cond=float(np.median(condall)),\n\
+      \                 p90_cond=float(np.quantile(condall,.9)),\n                 median_zf_noise_enhancement=float(np.median(enhall)),\
+      \ seed=seed))\n    bins=[]\n    for i,label in enumerate(CONDITION_LABELS):\n        for d\
+      \ in DET:\n            cnt=int(n_by_bin[i]); err=int(bit_errors_by_bin[d][i])\n           \
+      \ frame_num=np.asarray(frame_bin_bit_errors[d][i],dtype=float)\n            frame_den=np.asarray(frame_bin_bits[i],dtype=float)\n\
+      \            denom=frame_den[sample_indices].sum(axis=1)\n            ratio=np.divide(frame_num[sample_indices].sum(axis=1),denom,\n\
+      \                    out=np.full(len(denom),np.nan),where=denom>0)\n            lo,hi=np.nanquantile(ratio,[.025,.975])\
+      \ if np.any(np.isfinite(ratio)) else (np.nan,np.nan)\n            bins.append(dict(experiment=experiment,snr_db=snr_db,rho=rho,\n\
+      \                  pilot_snr_db='perfect' if pilot_snr_db is None else pilot_snr_db,\n    \
+      \              condition_bin=label,detector=d,bits=cnt,bit_errors=err,\n                  ber=err/cnt\
+      \ if cnt else np.nan,ci95_low=lo,ci95_high=hi))\n    return rows, bins, first_capture\n\n\n\
+      def _write_csv(path, rows):\n    with Path(path).open('w', newline='') as f:\n        writer=csv.DictWriter(f,fieldnames=list(rows[0].keys()))\n\
+      \        writer.writeheader(); writer.writerows(rows)\n\n\ndef run_study(output_dir, frames=800,\
+      \ seed=2026, batch=100, quiet=False):\n    output_dir=Path(output_dir);output_dir.mkdir(parents=True,exist_ok=True)\n\
+      \    rows=[]; bins=[]; capture=None\n    plan=experiment_plan()\n    for i,(experiment,snr,rho,pilot,group)\
+      \ in enumerate(plan,1):\n        r,b,c=run_point(experiment,snr,rho,pilot,seed+group,\n   \
+      \                     frames=frames,batch=batch,\n                        capture=(experiment=='estimation'\
+      \ and pilot==20.0))\n        rows.extend(r);bins.extend(b)\n        if c is not None: capture=c\n\
+      \        if not quiet:\n            print(f'[{i:02d}/{len(plan)}] {experiment:11s} Es/N0={snr:4.0f}\
+      \ dB '\n                  f'rho={rho:0.2f} pilot={pilot}  '\n                  f'BER(ZF/MMSE/SIC)='+\
+      \ '/'.join(f'{x[\"ber\"]:.4g}' for x in r),flush=True)\n    _write_csv(output_dir/'Lab2_MIMO_OFDM_results.csv',rows)\n\
+      \    _write_csv(output_dir/'Lab2_condition_bins.csv',bins)\n    if capture is not None:\n \
+      \       np.savez_compressed(output_dir/'representative_capture.npz',**capture)\n    return\
+      \ rows,bins\n\n\n# GNU Radio GUI outputs: QPSK TX, ZF, MMSE, and SIC;\n# dashboard streams:\
+      \ BER ZF/MMSE/SIC, median condition, channel NMSE.\nclass blk(gr.sync_block):\n    def __init__(self,\
+      \ snr_db=12.0, rho=0.6, pilot_snr_db=20.0, seed=2026):\n        gr.sync_block.__init__(self,\
+      \ name='2x2 MIMO-OFDM experiment',in_sig=None,\n              out_sig=[np.complex64, np.complex64,\
+      \ np.complex64,\n                  np.complex64, np.float32, np.float32, np.float32,\n    \
+      \              np.float32, np.float32])\n        self.snr_db=float(snr_db)\n        self.rho=float(rho)\n\
+      \        self.pilot_snr_db=float(pilot_snr_db)\n        self.seed=int(seed)\n        self.rng=np.random.default_rng(self.seed)\n\
+      \        self.buffer=[]\n    def work(self,input_items,output_items):\n        n=len(output_items[0]);\
+      \ offset=0\n        while offset<n:\n            if not self.buffer:\n                truth,tx,y,ht,he,wave,n0=generate_batch(\n\
+      \                    self.rng,1,self.snr_db,self.rho,self.pilot_snr_db)\n                d=solve_detectors(he,y,n0)\n\
+      \                sv=np.linalg.svd(ht.reshape(-1,2,2),compute_uv=False)\n                cond=float(np.median(sv[:,0]/sv[:,1]))\n\
+      \                nmse=float(np.sum(np.abs(he-ht)**2)/np.sum(np.abs(ht)**2))\n             \
+      \   base=[tx[0,:,0],d['ZF'][0,:,0],d['MMSE'][0,:,0],\n                      d['MMSE-SIC'][0,:,0]]\n\
+      \                bvals=[float(np.mean(hard_bits(d[name])!=truth)) for name in DET]\n      \
+      \          bvals += [cond,nmse]\n                # Display each constellation stream repeatedly;\
+      \ never confuse\n                # these monitor samples with a physical streaming MIMO interface.\n\
+      \                width=max(len(q) for q in base)\n                self.buffer=[np.resize(z,width).astype(np.complex64)\
+      \ for z in base]+[\n                    np.full(width,v,dtype=np.float32) for v in bvals]\n\
+      \            take=min(n-offset,len(self.buffer[0]))\n            for j,arr in enumerate(output_items):arr[offset:offset+take]=self.buffer[j][:take]\n\
+      \            self.buffer=[v[take:] for v in self.buffer]\n            if not len(self.buffer[0]):self.buffer=[]\n\
+      \            offset+=take\n        return n\n\nif __name__=='__main__':\n    ap=argparse.ArgumentParser(description='Run\
+      \ the complete 2x2 MIMO-OFDM study')\n    ap.add_argument('--output',default='results')\n \
+      \   ap.add_argument('--frames',type=int,default=800)\n    ap.add_argument('--seed',type=int,default=2026)\n\
+      \    ap.add_argument('--batch',type=int,default=100)\n    args=ap.parse_args()\n    run_study(args.output,\
+      \ frames=args.frames, seed=args.seed,batch=args.batch)\n"
+    affinity: ''
+    alias: ''
+    comment: ''
+    snr_db: snr_db
+    rho: rho
+    pilot_snr_db: pilot_snr_db
+    seed: '2026'
+    minoutbuf: '0'
+    maxoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 180
+    - 260
+    rotation: 0
+    state: enabled
+- name: qtgui_const_sink_x_0
+  id: qtgui_const_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    axislabels: 'True'
+    color1: '"blue"'
+    color10: '"dark blue"'
+    color2: '"red"'
+    color3: '"green"'
+    color4: '"black"'
+    color5: '"cyan"'
+    color6: '"magenta"'
+    color7: '"yellow"'
+    color8: '"dark red"'
+    color9: '"dark green"'
+    comment: ''
+    grid: 'True'
+    gui_hint: 1,0,2,2
+    label1: Transmitted QPSK
+    label10: ''
+    label2: ZF
+    label3: MMSE
+    label4: MMSE-SIC
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    legend: 'True'
+    marker1: '0'
+    marker10: '0'
+    marker2: '0'
+    marker3: '0'
+    marker4: '0'
+    marker5: '0'
+    marker6: '0'
+    marker7: '0'
+    marker8: '0'
+    marker9: '0'
+    name: 'QPSK: transmitted / ZF / MMSE / MMSE-SIC'
+    nconnections: '4'
+    size: '1024'
+    style1: '0'
+    style10: '0'
+    style2: '0'
+    style3: '0'
+    style4: '0'
+    style5: '0'
+    style6: '0'
+    style7: '0'
+    style8: '0'
+    style9: '0'
+    tr_chan: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.20'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    xmax: '2.5'
+    xmin: '-2.5'
+    ymax: '2'
+    ymin: '-2.5'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 560
+    - 260
+    rotation: 0
+    state: enabled
+- name: qtgui_number_sink_0
+  id: qtgui_number_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    autoscale: 'True'
+    avg: '0'
+    color1: ("black", "black")
+    color10: ("black", "black")
+    color2: ("black", "black")
+    color3: ("black", "black")
+    color4: ("black", "black")
+    color5: ("blue", "red")
+    color6: ("black", "black")
+    color7: ("black", "black")
+    color8: ("black", "black")
+    color9: ("black", "black")
+    comment: ''
+    factor1: '1'
+    factor10: '1'
+    factor2: '1'
+    factor3: '1'
+    factor4: '1'
+    factor5: '1'
+    factor6: '1'
+    factor7: '1'
+    factor8: '1'
+    factor9: '1'
+    graph_type: qtgui.NUM_GRAPH_NONE
+    gui_hint: 3,0,2,2
+    label1: ZF frame BER
+    label10: Frames
+    label2: MMSE frame BER
+    label3: MMSE-SIC frame BER
+    label4: Median channel condition
+    label5: LS channel NMSE
+    label6: Adaptive Avg Iterations
+    label7: Fixed Decoder work
+    label8: Adaptive Decoder work
+    label9: Decoder work saved
+    max: '1'
+    min: '-1'
+    name: Instantaneous frame metrics (GUI only)
+    nconnections: '5'
+    type: float
+    unit1: ''
+    unit10: ''
+    unit2: ''
+    unit3: ''
+    unit4: ''
+    unit5: ''
+    unit6: ''
+    unit7: ''
+    unit8: ''
+    unit9: ''
+    update_time: '0.25'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 560
+    - 510
+    rotation: 0
+    state: enabled
+connections:
+- - epy_block_0
+  - '0'
+  - qtgui_const_sink_x_0
+  - '0'
+- - epy_block_0
+  - '1'
+  - qtgui_const_sink_x_0
+  - '1'
+- - epy_block_0
+  - '2'
+  - qtgui_const_sink_x_0
+  - '2'
+- - epy_block_0
+  - '3'
+  - qtgui_const_sink_x_0
+  - '3'
+- - epy_block_0
+  - '4'
+  - qtgui_number_sink_0
+  - '0'
+- - epy_block_0
+  - '5'
+  - qtgui_number_sink_0
+  - '1'
+- - epy_block_0
+  - '6'
+  - qtgui_number_sink_0
+  - '2'
+- - epy_block_0
+  - '7'
+  - qtgui_number_sink_0
+  - '3'
+- - epy_block_0
+  - '8'
+  - qtgui_number_sink_0
+  - '4'
+metadata:
+  file_format: 1
+  grc_version: 3.10.9.2

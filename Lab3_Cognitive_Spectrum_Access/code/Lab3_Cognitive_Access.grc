@@ -1,0 +1,457 @@
+options:
+  parameters:
+    author: Balraj Minhas
+    catch_exceptions: 'True'
+    category: '[GRC Hier Blocks]'
+    cmake_opt: ''
+    comment: ''
+    copyright: ''
+    description: Eight-band FFT sensing, noise-floor adaptation, half-duplex secondary access, retuning
+      and overlap metrics
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: qt_gui
+    hier_block_src_path: '.:'
+    id: Lab3_Cognitive_Access
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: Closed-Loop Cognitive Spectrum Access with Adaptive Sensing
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 8
+    rotation: 0
+    state: enabled
+blocks:
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: ''
+    value: '512000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 250
+    - 8
+    rotation: 0
+    state: enabled
+- name: epy_block_0
+  id: epy_block
+  parameters:
+    _source_code: "#!/usr/bin/env python3\n\"\"\"Lab 3: causal closed-loop cognitive spectrum access\
+      \ in a simulated 8-band environment.\n\nThe standalone study runs using NumPy. GNU Radio is\
+      \ optional and only required\nfor the Embedded Python Block live visualization. No physical\
+      \ RF is transmitted.\n\"\"\"\nfrom __future__ import annotations\nimport argparse\nimport csv\n\
+      from pathlib import Path\nimport numpy as np\n\ntry:\n    from gnuradio import gr\nexcept ImportError:\n\
+      \    class _DummyGR:\n        class sync_block:\n            def __init__(self,*args,**kwargs):\
+      \ pass\n    gr = _DummyGR()\n\nNB = 8\nNFFT = 128\nBINS = NFFT // NB\nSNAPS = 8\nDT = 0.002\
+      \  # simulated seconds per discrete observation/decision tick\nFS = NFFT * SNAPS / DT  # 512\
+      \ ksample/s: 8 x 128 samples in each 2-ms tick\nPAYLOAD_BITS = 128  # one logical payload packet\
+      \ per eligible 2-ms tick\nCAL_TICKS = 40  # all channels are vacant during documented receiver\
+      \ calibration\nTHRESHOLD_FACTOR = 1.20  # fixed multiplier; empirical Pfa, not asserted as\
+      \ ideal CFAR\nPOLICIES = ('fixed_threshold', 'fixed_period', 'adaptive')\nSCENARIOS = {\n \
+      \   'nominal': dict(pu_snr_db=5.0, noise_rise_db=4.0, p01=0.008, p10=0.015),\n    'weak_primary':\
+      \ dict(pu_snr_db=-4.0, noise_rise_db=4.0, p01=0.008, p10=0.015),\n    'busy_band': dict(pu_snr_db=5.0,\
+      \ noise_rise_db=4.0, p01=0.016, p10=0.015),\n}\n\n\ndef complex_gaussian(rng, shape):\n   \
+      \ return (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)) / np.sqrt(2)\n\n\n\
+      def generate_environment(seed=2026, scenario='nominal', ticks=3000, capture=False, store_iq=False):\n\
+      \    \"\"\"Generate one shared time series, independent of the secondary controller.\n\n  \
+      \  Eight frequency slots occupy disjoint blocks of sixteen 128-point DFT bins.\n    Eight independent\
+      \ 128-sample FFT snapshots form each 2-ms sensing statistic.\n    The primary follows a per-channel\
+      \ Markov on/off process. Noise changes over time.\n    \"\"\"\n    if scenario not in SCENARIOS:\
+      \ raise ValueError('unknown scenario')\n    if ticks <= CAL_TICKS + 10: raise ValueError('ticks\
+      \ must exceed calibration period')\n    c = SCENARIOS[scenario]\n    rng = np.random.default_rng(seed)\n\
+      \    occupancy = np.zeros((ticks, NB), dtype=bool)\n    for t in range(CAL_TICKS + 1, ticks):\n\
+      \        old = occupancy[t-1]\n        u = rng.random(NB)\n        occupancy[t] = np.where(old,\
+      \ u >= c['p10'], u < c['p01'])\n    # Slowly varying received noise power; known to the simulator,\
+      \ not to controller.\n    time = np.arange(ticks, dtype=float)\n    noise_db = c['noise_rise_db']\
+      \ * time / (ticks - 1) + 0.25 * np.sin(2 * np.pi * time / (ticks / 3))\n    noise_power = 10**(noise_db\
+      \ / 10)\n    pu_power = 10**(c['pu_snr_db'] / 10)  # constant absolute PU power relative to\
+      \ initial noise\n    energies = np.empty((ticks, NB), dtype=np.float64)\n    example = None\n\
+      \    full_iq = np.empty((ticks,SNAPS*NFFT),dtype=np.complex64) if store_iq else None\n    #\
+      \ Batch IFFT -> add noise in time -> FFT -> square-and-average over each subband.\n    for\
+      \ start in range(0, ticks, 80):\n        end = min(start+80, ticks)\n        count = end -\
+      \ start\n        symbols = (2*rng.integers(0, 2, size=(count, SNAPS, NFFT))-1 +\n         \
+      \          1j*(2*rng.integers(0, 2, size=(count, SNAPS, NFFT))-1)) / np.sqrt(2)\n        mask\
+      \ = np.repeat(occupancy[start:end], BINS, axis=1)\n        X = symbols * mask[:,None,:] * np.sqrt(pu_power)\n\
+      \        x = np.fft.ifft(X, axis=-1, norm='ortho')\n        x += complex_gaussian(rng, x.shape)\
+      \ * np.sqrt(noise_power[start:end,None,None])\n        Y = np.fft.fft(x, axis=-1, norm='ortho')\n\
+      \        if store_iq: full_iq[start:end] = x.reshape(count,-1).astype(np.complex64)\n     \
+      \   energies[start:end] = np.mean(np.abs(Y.reshape(count,SNAPS,NB,BINS))**2, axis=(1,3))\n\
+      \        if capture and start <= min(CAL_TICKS+150, ticks-1) < end:\n            ix = min(CAL_TICKS+150,\
+      \ ticks-1)-start\n            example = dict(wideband_iq=x[ix].reshape(-1), fft_power=np.mean(np.abs(Y[ix])**2,axis=0))\n\
+      \    baseline = float(np.mean(energies[:CAL_TICKS]))\n    # Account for downward sampling bias\
+      \ when using the low three of eight bands.\n    low3_baseline = float(np.mean(np.sort(energies[:CAL_TICKS],axis=1)[:,:3]))\n\
+      \    bias_correction = baseline / low3_baseline\n    return dict(energies=energies, occupancy=occupancy,\
+      \ noise_power=noise_power,\n                baseline=baseline, bias_correction=bias_correction,\
+      \ example=example,\n                seed=seed, scenario=scenario, ticks=ticks, pu_power=pu_power,\
+      \ iq=full_iq)\n\n\ndef choose_channel(energies, detected, current):\n    available = np.flatnonzero(~detected)\n\
+      \    if current >= 0 and not detected[current]: return current\n    if len(available) == 0:\
+      \ return -1\n    # A low measured energy is preferred, without using ground-truth occupancy.\n\
+      \    return int(available[np.argmin(energies[available])])\n\n\ndef simulate_controller(env,\
+      \ policy='adaptive', trace=False):\n    \"\"\"Causal half-duplex listen-before-transmit policy.\n\
+      \n    At a sensing tick the secondary is muted; a channel change requires the\n    subsequent\
+      \ tick as a retuning guard, with payload resuming two ticks\n    after sensing starts. The\
+      \ controller sees only energy samples on sensing ticks.\n    \"\"\"\n    if policy not in POLICIES:\
+      \ raise ValueError(policy)\n    energies, occ = env['energies'], env['occupancy']\n    ticks\
+      \ = len(energies)\n    floor_est = env['baseline']\n    fixed_threshold = THRESHOLD_FACTOR\
+      \ * floor_est\n    next_sense = CAL_TICKS\n    mute_until = 0\n    current = -1\n    n_sense=retunes=transmitted=delivered=collisions=0\n\
+      \    positives=negatives=hits=false_alarms=0\n    episode_start = None\n    episode_ch = -1\n\
+      \    n_arrivals_while_transmitting=0\n    vacate_delays=[]\n    sense_to_retune=[]\n    traced=[]\n\
+      \    for t in range(CAL_TICKS,ticks):\n        sensing = (t >= next_sense)\n        est_noise\
+      \ = floor_est\n        detected = np.full(NB, False, dtype=bool)\n        target = current\n\
+      \        interval = 16 if policy != 'adaptive' else 8\n        switched = False\n        if\
+      \ sensing:\n            n_sense += 1\n            if policy != 'fixed_threshold':\n       \
+      \         low3 = np.mean(np.sort(energies[t])[:3]) * env['bias_correction']\n             \
+      \   floor_est = .60 * floor_est + .40 * low3\n                est_noise = floor_est\n     \
+      \       threshold = fixed_threshold if policy=='fixed_threshold' else THRESHOLD_FACTOR * floor_est\n\
+      \            detected = energies[t] > threshold\n            positives += int(np.count_nonzero(occ[t]))\n\
+      \            negatives += int(np.count_nonzero(~occ[t]))\n            hits += int(np.count_nonzero(detected\
+      \ & occ[t]))\n            false_alarms += int(np.count_nonzero(detected & ~occ[t]))\n     \
+      \       target = choose_channel(energies[t], detected, current)\n            switched = (target\
+      \ != current)\n            current = target\n            if switched:\n                if target\
+      \ >= 0:\n                    retunes += 1\n                    mute_until = t+2  # sensing\
+      \ tick, then one guard tick; TX resumes t+2\n                    sense_to_retune.append(2*DT*1000)\
+      \ # sensing start to first TX eligibility\n                else:\n                    mute_until\
+      \ = t+1 # becoming idle is not a retune\n            if policy == 'adaptive':\n           \
+      \     if target < 0 or switched: interval=2\n                else:\n                    ratio\
+      \ = energies[t,target] / max(threshold, 1e-12)\n                    interval = 2 if ratio >=\
+      \ 1.0 else (4 if ratio >= .9 else 8)\n            next_sense=t+interval\n        is_tx = (not\
+      \ sensing) and (t >= mute_until) and (current >= 0)\n        is_collision=bool(is_tx and occ[t,current])\n\
+      \        if is_tx:\n            transmitted+=1\n            if is_collision: collisions+=1\n\
+      \            else: delivered+=1\n        # A PU return is protected only once the SU actually\
+      \ abandons the\n        # affected channel (or enters idle). A sensing gap alone is not vacating.\n\
+      \        if episode_start is not None:\n            if not occ[t,episode_ch]:\n           \
+      \     episode_start=None  # PU disappeared before the SU vacated\n            elif current\
+      \ != episode_ch:\n                vacate_delays.append((t-episode_start)*DT*1000)\n       \
+      \         episode_start=None\n        if episode_start is None and is_collision and t>CAL_TICKS\
+      \ and not occ[t-1,current]:\n            episode_start=t\n            episode_ch=current\n\
+      \            n_arrivals_while_transmitting+=1\n        if trace:\n            traced.append(dict(tick=t,time_ms=round(1000*t*DT,3),\n\
+      \                primary_mask=''.join(str(int(v)) for v in occ[t]),\n                band0_power=float(energies[t,0]),\
+      \ noise_true=float(env['noise_power'][t]),\n                noise_est=float(est_noise), channel=int(current),\
+      \ sensing=int(sensing),\n                tx=int(is_tx), collision=int(is_collision), payload_delivered_bits=PAYLOAD_BITS\
+      \ if is_tx and not is_collision else 0,\n                interval_ticks=int(interval) if sensing\
+      \ else 0, change=int(switched)))\n    duration=(ticks-CAL_TICKS)*DT\n    metrics=dict(scenario=env['scenario'],\
+      \ seed=env['seed'], policy=policy,\n        ticks=ticks-CAL_TICKS, duration_s=duration, sensing_ticks=n_sense,\n\
+      \        sensing_fraction=n_sense/(ticks-CAL_TICKS), detected_primary=hits, sensed_primary=positives,\n\
+      \        false_alarms=false_alarms, sensed_vacant=negatives,\n        pd=hits/positives if\
+      \ positives else float('nan'),\n        pfa=false_alarms/negatives if negatives else float('nan'),\n\
+      \        retunes=retunes, sensing_to_retune_ms=float(np.mean(sense_to_retune)) if sense_to_retune\
+      \ else float('nan'),\n        transmitted_packets=transmitted, successful_packets=delivered,\n\
+      \        collision_packets=collisions, primary_collision_ms=collisions*DT*1000,\n        collision_fraction_tx=collisions/transmitted\
+      \ if transmitted else 0.0,\n        goodput_kbps=delivered*PAYLOAD_BITS/duration/1000,\n  \
+      \      pu_return_exposures=n_arrivals_while_transmitting, exposures_vacated=len(vacate_delays),\n\
+      \        median_onset_to_vacate_ms=float(np.median(vacate_delays)) if vacate_delays else float('nan'))\n\
+      \    return metrics,traced\n\n\ndef write_csv(path, rows):\n    path = Path(path); path.parent.mkdir(parents=True,exist_ok=True)\n\
+      \    if not rows: return\n    with path.open('w',newline='') as f:\n        w=csv.DictWriter(f,\
+      \ fieldnames=list(rows[0]));w.writeheader();w.writerows(rows)\n\n\ndef run_study(directory='results',ticks=3000,seeds=(2026,2027,2028)):\n\
+      \    out=Path(directory);out.mkdir(parents=True,exist_ok=True)\n    metrics=[]; representative=None\n\
+      \    for scenario in SCENARIOS:\n        for seed in seeds:\n            env=generate_environment(seed,\
+      \ scenario, ticks, capture=(scenario=='nominal' and seed==seeds[0]))\n            if scenario=='nominal'\
+      \ and seed==seeds[0]:\n                representative=env\n                np.savez_compressed(out/'representative_spectrum.npz',\n\
+      \                    fft_power=env['example']['fft_power'],iq=env['example']['wideband_iq'],\n\
+      \                    energy=env['energies'],occupancy=env['occupancy'].astype(np.uint8),\n\
+      \                    noise_power=env['noise_power'],fs=FS,dt=DT)\n            for policy in\
+      \ POLICIES:\n                m,trace=simulate_controller(env,policy,trace=(scenario=='nominal'\
+      \ and seed==seeds[0] and policy in ('fixed_period','adaptive')))\n                metrics.append(m)\n\
+      \                print(f\"{scenario:14s} seed={seed} {policy:16s} Pd={m['pd']:.3f} Pfa={m['pfa']:.3f}\
+      \ \"\n                      f\"collision={m['primary_collision_ms']:.0f}ms goodput={m['goodput_kbps']:.2f}kb/s\"\
+      )\n                if trace: write_csv(out/f'{policy}_trace.csv',trace)\n    write_csv(out/'Lab3_spectrum_access_results.csv',metrics)\n\
+      \    return metrics\n\n\nclass blk(gr.sync_block):\n    \"\"\"GNU Radio display replay of the\
+      \ recorded causal, half-duplex controller.\n\n    No hardware transmission; the controller\
+      \ is evaluated by simulate_controller.\n    The spectrum display uses the very same complex\
+      \ samples used for detection.\n    \"\"\"\n    def __init__(self, seed=2026):\n        gr.sync_block.__init__(self,name='Closed-loop\
+      \ cognitive access',in_sig=None,\n                            out_sig=[np.complex64,np.complex64,np.float32,np.float32,np.float32,np.float32])\n\
+      \        self.env=generate_environment(int(seed),'nominal',ticks=3000,store_iq=True)\n    \
+      \    self.metrics,self.trace=simulate_controller(self.env,'adaptive',trace=True)\n        self.rng=np.random.default_rng(seed+9000)\n\
+      \        self.tick_index=0\n        self.offset=SNAPS*NFFT\n        self.env_samples=np.zeros(SNAPS*NFFT,dtype=np.complex64)\n\
+      \        self.su_samples=np.zeros(SNAPS*NFFT,dtype=np.complex64)\n        self.status=np.zeros(4,dtype=np.float32)\n\
+      \n    def _next_tick(self):\n        k=self.tick_index % len(self.trace)\n        record=self.trace[k]\n\
+      \        tick=int(record['tick'])\n        self.env_samples=self.env['iq'][tick]\n        self.su_samples.fill(0)\n\
+      \        if record['tx']:\n            ch=record['channel']\n            bit_i=self.rng.integers(0,2,size=(SNAPS,BINS))\n\
+      \            bit_q=self.rng.integers(0,2,size=(SNAPS,BINS))\n            symbols=((1-2*bit_i)+1j*(1-2*bit_q))/np.sqrt(2)\n\
+      \            frequency=np.zeros((SNAPS,NFFT),dtype=np.complex128)\n            frequency[:,ch*BINS:(ch+1)*BINS]=symbols\n\
+      \            self.su_samples=np.fft.ifft(frequency,axis=-1,norm='ortho').astype(np.complex64).reshape(-1)\n\
+      \        self.status[:]=[record['channel'],record['sensing'],record['collision'],record['noise_est']]\n\
+      \        self.tick_index+=1\n        self.offset=0\n\n    def work(self,input_items,output_items):\n\
+      \        count=len(output_items[0]);done=0\n        while done<count:\n            if self.offset\
+      \ >= SNAPS*NFFT:self._next_tick()\n            width=min(count-done,SNAPS*NFFT-self.offset)\n\
+      \            x=slice(self.offset,self.offset+width)\n            o=slice(done,done+width)\n\
+      \            output_items[0][o]=self.env_samples[x]\n            output_items[1][o]=self.su_samples[x]\n\
+      \            for j in range(4): output_items[j+2][o]=self.status[j]\n            done+=width;self.offset+=width\n\
+      \        return count\n\n\nif __name__=='__main__':\n    ap=argparse.ArgumentParser(description='Reproduce\
+      \ Lab 3 closed-loop access study')\n    ap.add_argument('--output',default='results')\n   \
+      \ ap.add_argument('--ticks',type=int,default=3000)\n    ap.add_argument('--seeds',type=int,nargs='+',default=[2026,2027,2028])\n\
+      \    a=ap.parse_args()\n    run_study(a.output,a.ticks,tuple(a.seeds))\n"
+    affinity: ''
+    alias: ''
+    comment: ''
+    seed: '2026'
+    minoutbuf: '0'
+    maxoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 80
+    - 260
+    rotation: 0
+    state: enabled
+- name: qtgui_freq_sink_x_0
+  id: qtgui_freq_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    average: '0.2'
+    axislabels: 'True'
+    bw: samp_rate
+    color1: '"blue"'
+    color10: '"dark blue"'
+    color2: '"red"'
+    color3: '"green"'
+    color4: '"black"'
+    color5: '"cyan"'
+    color6: '"magenta"'
+    color7: '"yellow"'
+    color8: '"dark red"'
+    color9: '"dark green"'
+    comment: ''
+    ctrlpanel: 'False'
+    fc: '0'
+    fftsize: '1024'
+    freqhalf: 'True'
+    grid: 'True'
+    gui_hint: 0,0,2,2
+    label: Relative Gain
+    label1: Primary environment
+    label10: ''''''
+    label2: Secondary transmitter
+    label3: ''''''
+    label4: ''''''
+    label5: ''''''
+    label6: ''''''
+    label7: ''''''
+    label8: ''''''
+    label9: ''''''
+    legend: 'True'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: Primary environment and secondary waveform
+    nconnections: '2'
+    norm_window: 'False'
+    showports: 'False'
+    tr_chan: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_tag: '""'
+    type: complex
+    units: dB
+    update_time: '0.20'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    wintype: window.WIN_BLACKMAN_hARRIS
+    ymax: '20'
+    ymin: '-80'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 560
+    - 220
+    rotation: 0
+    state: enabled
+- name: qtgui_waterfall_sink_x_0
+  id: qtgui_waterfall_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    axislabels: 'True'
+    bw: samp_rate
+    color1: '0'
+    color10: '0'
+    color2: '0'
+    color3: '0'
+    color4: '0'
+    color5: '0'
+    color6: '0'
+    color7: '0'
+    color8: '0'
+    color9: '0'
+    comment: ''
+    fc: '0'
+    fftsize: '1024'
+    freqhalf: 'True'
+    grid: 'True'
+    gui_hint: 0,2,2,2
+    int_max: '20'
+    int_min: '-80'
+    label1: ''
+    label10: ''
+    label2: ''
+    label3: ''
+    label4: ''
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    legend: 'True'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: 'Primary occupancy: waterfall'
+    nconnections: '1'
+    showports: 'False'
+    type: complex
+    update_time: '0.20'
+    wintype: window.WIN_BLACKMAN_hARRIS
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 560
+    - 470
+    rotation: 0
+    state: enabled
+- name: qtgui_number_sink_0
+  id: qtgui_number_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    autoscale: 'True'
+    avg: '0'
+    color1: ("black", "black")
+    color10: ("black", "black")
+    color2: ("black", "black")
+    color3: ("black", "black")
+    color4: ("black", "black")
+    color5: ("blue", "red")
+    color6: ("black", "black")
+    color7: ("black", "black")
+    color8: ("black", "black")
+    color9: ("black", "black")
+    comment: ''
+    factor1: '1'
+    factor10: '1'
+    factor2: '1'
+    factor3: '1'
+    factor4: '1'
+    factor5: '1'
+    factor6: '1'
+    factor7: '1'
+    factor8: '1'
+    factor9: '1'
+    graph_type: qtgui.NUM_GRAPH_NONE
+    gui_hint: 2,0,1,4
+    label1: Selected channel (-1 idle)
+    label10: Frames
+    label2: Sensing (muted)
+    label3: Primary collision
+    label4: Estimated noise floor
+    label5: Fixed Avg Iterations
+    label6: Adaptive Avg Iterations
+    label7: Fixed Decoder work
+    label8: Adaptive Decoder work
+    label9: Decoder work saved
+    max: '1'
+    min: '-1'
+    name: Secondary access state
+    nconnections: '4'
+    type: float
+    unit1: ''
+    unit10: ''
+    unit2: ''
+    unit3: ''
+    unit4: ''
+    unit5: ''
+    unit6: ''
+    unit7: ''
+    unit8: ''
+    unit9: ''
+    update_time: '0.25'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 570
+    - 740
+    rotation: 0
+    state: enabled
+connections:
+- - epy_block_0
+  - '0'
+  - qtgui_freq_sink_x_0
+  - '0'
+- - epy_block_0
+  - '1'
+  - qtgui_freq_sink_x_0
+  - '1'
+- - epy_block_0
+  - '0'
+  - qtgui_waterfall_sink_x_0
+  - '0'
+- - epy_block_0
+  - '2'
+  - qtgui_number_sink_0
+  - '0'
+- - epy_block_0
+  - '3'
+  - qtgui_number_sink_0
+  - '1'
+- - epy_block_0
+  - '4'
+  - qtgui_number_sink_0
+  - '2'
+- - epy_block_0
+  - '5'
+  - qtgui_number_sink_0
+  - '3'
+metadata:
+  file_format: 1
+  grc_version: 3.10.9.2

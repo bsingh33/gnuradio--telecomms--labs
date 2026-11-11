@@ -1,0 +1,799 @@
+options:
+  parameters:
+    author: Balraj Minhas
+    catch_exceptions: 'True'
+    category: '[GRC Hier Blocks]'
+    cmake_opt: ''
+    comment: ''
+    copyright: ''
+    description: ''
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: qt_gui
+    hier_block_src_path: '.:'
+    id: Lab1_Adaptive_LDPC_OFDM
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: Complexity-Adaptive LDPC-Coded OFDM
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 8
+    rotation: 0
+    state: enabled
+blocks:
+- name: jsr_db
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: 0,1,1,1
+    label: Narrowband JSR (dB)
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '-40'
+    step: '1'
+    stop: '5'
+    value: '-20'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 440
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: max_iters
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: 0,2,1,1
+    label: Maximum LDPC Iterations
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '5'
+    step: '1'
+    stop: '30'
+    value: '20'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 624
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: rate_sel
+  id: variable_qtgui_chooser
+  parameters:
+    comment: ''
+    gui_hint: 0,3,1,1
+    label: LDPC Code Rate
+    label0: 1/2
+    label1: 2/3
+    label2: 3/4
+    label3: ''
+    label4: ''
+    labels: '[]'
+    num_opts: '3'
+    option0: '0'
+    option1: '1'
+    option2: '2'
+    option3: '3'
+    option4: '4'
+    options: '[0, 1, 2]'
+    orient: Qt.QVBoxLayout
+    type: int
+    value: '0'
+    widget: combo_box
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 816
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: ''
+    value: '64000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 184
+    - 12
+    rotation: 0
+    state: enabled
+- name: snr_db
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: 0,0,1,1
+    label: SNR (dB)
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '-2'
+    step: '1'
+    stop: '24'
+    value: '10'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 304
+    - 8.0
+    rotation: 0
+    state: enabled
+- name: epy_block_0
+  id: epy_block
+  parameters:
+    _source_code: "import csv\nimport time\nfrom collections import deque\nfrom pathlib import Path\n\
+      from datetime import datetime, timezone\nimport os\n\nimport numpy as np\ntry:\n    from gnuradio\
+      \ import gr\nexcept ImportError:\n    # Allow the identical engine to run and be tested without\
+      \ GNU Radio.\n    class _SyncBlock:\n        def __init__(self, *args, **kwargs):\n       \
+      \     pass\n    class _GR:\n        sync_block = _SyncBlock\n    gr = _GR()\n\n\nclass blk(gr.sync_block):\n\
+      \    \"\"\"LDPC-coded OFDM link with fixed and adaptive min-sum decoding.\"\"\"\n\n    def\
+      \ __init__(\n        self,\n        snr_db=10.0,\n        jsr_db=-20.0,\n        max_iters=20,\n\
+      \        rate_sel=0,\n        seed=2026,\n        window_frames=1000,\n        report_mode=True,\n\
+      \        frames_per_point=1000,\n        extended_report=False,\n        csi_mode=\"perfect\"\
+      ,\n        code_family=\"random_eira\",\n        quant_bits=0,\n        run_label=\"\",\n \
+      \   ):\n        gr.sync_block.__init__(\n            self,\n            name=\"LDPC-OFDM Engine\"\
+      ,\n            in_sig=None,\n            out_sig=[\n                np.complex64, np.complex64,\
+      \ np.complex64,\n                np.float32, np.float32, np.float32, np.float32,\n        \
+      \        np.float32, np.float32, np.float32, np.float32,\n                np.float32, np.float32,\n\
+      \            ],\n        )\n\n        self.snr_db = float(snr_db)\n        self.jsr_db = float(jsr_db)\n\
+      \        self.max_iters = int(max_iters)\n        self.rate_sel = int(rate_sel)\n\n       \
+      \ self.seed = int(seed)\n        self.window_frames = int(window_frames)\n        self.rng\
+      \ = np.random.default_rng(self.seed)\n\n        self.nfft = 64\n        self.cp = 16\n    \
+      \    self.k_info = 96\n        self.active = np.r_[np.arange(1, 25), np.arange(40, 64)]\n \
+      \       self.interferer_bin = 12\n\n        self.report_mode = bool(report_mode)\n        self.frames_per_point\
+      \ = int(frames_per_point)\n        self.extended_report = bool(extended_report)\n        if\
+      \ csi_mode not in (\"perfect\", \"pilot_ls\"):\n            raise ValueError(\"csi_mode must\
+      \ be 'perfect' or 'pilot_ls'\")\n        if code_family not in (\"random_eira\", \"structured_eira\"\
+      ):\n            raise ValueError(\"code_family must be 'random_eira' or 'structured_eira'\"\
+      )\n        if int(quant_bits) not in (0, 4, 6, 8):\n            raise ValueError(\"quant_bits\
+      \ must be 0, 4, 6, or 8\")\n        self.csi_mode = csi_mode\n        self.code_family = code_family\n\
+      \        self.quant_bits = int(quant_bits)\n        self.run_label = str(run_label)\n     \
+      \   self.report_plan = self._make_report_plan()\n        self.report_index = 0\n        self.report_frame\
+      \ = 0\n        self.report_done = False\n\n        self._control_key = None\n        self._frame_count\
+      \ = 0\n\n        # Never overwrite previous data when a new GUI or headless run starts.\n \
+      \       stamp = datetime.now(timezone.utc).strftime(\"%Y%m%dT%H%M%S_%fZ\")\n        run_id\
+      \ = f\"{stamp}_{os.getpid()}\"\n        if self.run_label:\n            safe_label = \"\".join(c\
+      \ if c.isalnum() or c in \"-_\" else \"_\" for c in self.run_label)\n            run_id +=\
+      \ \"_\" + safe_label[:48]\n        self.results_dir = Path.cwd() / \"results\" / \"runs\" /\
+      \ run_id\n        self.results_dir.mkdir(parents=True, exist_ok=False)\n\n        self.csv_path\
+      \ = self.results_dir / \"Lab1_LDPC_OFDM_results.csv\"\n        self.capture_path = self.results_dir\
+      \ / \"representative_capture.npz\"\n\n        self.rep_tx = []\n        self.rep_rx = []\n\
+      \        self.rep_waveform = []\n        self.last_outputs = None\n        self.last_metrics\
+      \ = None\n\n        self._build_code()\n        self._reset_stats()\n        self._init_csv()\n\
+      \n        print(\"[Lab1] Results:\", self.results_dir.resolve())\n\n    # ------------------------------------------------------------------\n\
+      \    # Experiment plan\n    # ------------------------------------------------------------------\n\
+      \n    def _make_report_plan(self):\n        plan = [\n            (\"representative\", 8.0,\
+      \ -10.0, 0, 20),\n        ]\n\n        for snr in [0, 2, 4, 6, 8, 10, 12, 14, 16]:\n      \
+      \      plan.append((\"snr_sweep\", float(snr), -10.0, 0, 20))\n\n        for jsr in [-30, -25,\
+      \ -20, -15, -10, -5, 0]:\n            plan.append((\"jsr_sweep\", 8.0, float(jsr), 0, 20))\n\
+      \n        if self.extended_report:\n            for rate in [0, 1, 2]:\n                plan.append((\"\
+      rate_sweep\", 6.0, -15.0, rate, 20))\n\n            for iters in [5, 10, 15, 20, 25, 30]:\n\
+      \                plan.append((\"iteration_sweep\", 6.0, -15.0, 0, iters))\n\n        return\
+      \ plan\n\n    def _current_settings(self):\n        if self.report_mode and not self.report_done:\n\
+      \            name, snr, jsr, rate, iters = self.report_plan[self.report_index]\n          \
+      \  return name, snr, jsr, rate, iters\n\n        return (\n            \"interactive\",\n \
+      \           float(self.snr_db),\n            float(self.jsr_db),\n            int(np.clip(self.rate_sel,\
+      \ 0, 2)),\n            max(1, int(self.max_iters)),\n        )\n\n    def _apply_settings(self,\
+      \ snr, jsr, rate, iters):\n        key = (snr, jsr, rate, iters)\n\n        if key == self._control_key:\n\
+      \            return\n\n        old_rate = None if self._control_key is None else self._control_key[2]\n\
+      \n        self.snr_db = snr\n        self.jsr_db = jsr\n        self.rate_sel = rate\n    \
+      \    self.max_iters = iters\n\n        if old_rate is None or rate != old_rate:\n         \
+      \   self._build_code()\n\n        self._reset_stats()\n        self._control_key = key\n\n\
+      \        print(\n            f\"[Lab1] SNR={snr:.1f} dB, JSR={jsr:.1f} dB, \"\n           \
+      \ f\"rate={self.code_rate:.3f}, Imax={iters}\"\n        )\n\n    def _advance_report(self):\n\
+      \        if not self.report_mode:\n            return\n\n        self.report_frame += 1\n \
+      \       if self.report_frame < self.frames_per_point:\n            return\n\n        name =\
+      \ self.report_plan[self.report_index][0]\n\n        if name == \"representative\":\n      \
+      \      np.savez_compressed(\n                self.capture_path,\n                ideal_qpsk=np.concatenate(self.rep_tx),\n\
+      \                equalized_qpsk=np.concatenate(self.rep_rx),\n                rx_waveform=np.concatenate(self.rep_waveform),\n\
+      \                samp_rate=64000.0,\n            )\n            print(\"[Lab1] Saved representative\
+      \ IQ capture.\")\n\n        self.report_index += 1\n        self.report_frame = 0\n\n     \
+      \   if self.report_index >= len(self.report_plan):\n            self.report_done = True\n \
+      \           print(\"[Lab1] REPORT RUN COMPLETE\")\n        else:\n            next_name = self.report_plan[self.report_index][0]\n\
+      \            print(f\"[Lab1] Starting {next_name}\")\n\n    # ------------------------------------------------------------------\n\
+      \    # LDPC code\n    # ------------------------------------------------------------------\n\
+      \n    def _build_code(self):\n        rates = [0.5, 2.0 / 3.0, 0.75]\n        idx = int(np.clip(self.rate_sel,\
+      \ 0, 2))\n\n        self.code_rate = rates[idx]\n        self.m_checks = int(\n           \
+      \ round(self.k_info * (1.0 - self.code_rate) / self.code_rate)\n        )\n\n        rng =\
+      \ np.random.default_rng(self.seed + 1000 + idx)\n\n        A = np.zeros((self.m_checks, self.k_info),\
+      \ dtype=np.uint8)\n        if self.code_family == \"structured_eira\":\n            # Circulant-permutation\
+      \ structure in A, accumulator B as below.\n            # Illustrative structured code; NOT\
+      \ a standards-defined QC-LDPC.\n            z = 8\n            row_blocks = self.m_checks //\
+      \ z\n            col_blocks = self.k_info // z\n            for cb in range(col_blocks):\n\
+      \                used = set()\n                for branch in range(3):\n                  \
+      \  rb = (cb + branch * max(1, row_blocks // 3)) % row_blocks\n                    while rb\
+      \ in used:\n                        rb = (rb + 1) % row_blocks\n                    used.add(rb)\n\
+      \                    shift = (3 * cb + 5 * branch + cb * branch) % z\n                    for\
+      \ pos in range(z):\n                        A[rb * z + pos, cb * z + (pos + shift) % z] = 1\n\
+      \        else:\n            for col in range(self.k_info):\n                rows = rng.choice(self.m_checks,\
+      \ size=3, replace=False)\n                A[rows, col] = 1\n\n        B = np.eye(self.m_checks,\
+      \ dtype=np.uint8)\n        for row in range(1, self.m_checks):\n            B[row, row - 1]\
+      \ = 1\n\n        self.A = A\n        self.H = np.concatenate((A, B), axis=1)\n        self.edge_count\
+      \ = int(np.count_nonzero(self.H))\n\n        self.check_vars = [\n            np.flatnonzero(self.H[row])\n\
+      \            for row in range(self.m_checks)\n        ]\n        self.var_checks = [\n    \
+      \        np.flatnonzero(self.H[:, col])\n            for col in range(self.H.shape[1])\n  \
+      \      ]\n\n    def _encode(self, bits):\n        s = (self.A @ bits) & 1\n\n        parity\
+      \ = np.empty(self.m_checks, dtype=np.uint8)\n        parity[0] = s[0]\n        for i in range(1,\
+      \ self.m_checks):\n            parity[i] = s[i] ^ parity[i - 1]\n\n        codeword = np.concatenate((bits,\
+      \ parity))\n\n        if np.any((self.H @ codeword) & 1):\n            raise RuntimeError(\"\
+      LDPC encoding failed parity check.\")\n\n        return codeword\n\n    # ------------------------------------------------------------------\n\
+      \    # Normalized min-sum decoder\n    # ------------------------------------------------------------------\n\
+      \n    def _quantize(self, x):\n        \"\"\"Uniform signed-message approximation; off when\
+      \ quant_bits=0.\"\"\"\n        if not self.quant_bits:\n            return x\n        clip\
+      \ = 20.0\n        max_code = (1 << (self.quant_bits - 1)) - 1\n        step = clip / max_code\n\
+      \        return np.round(np.clip(x, -clip, clip) / step) * step\n\n    def _decode(self, llr,\
+      \ max_iters, early_stop):\n        \"\"\"Independent normalized-min-sum execution with optional\
+      \ REAL exit.\"\"\"\n        alpha = 0.80\n        m, n = self.H.shape\n        llr = self._quantize(np.asarray(llr,\
+      \ dtype=float))\n        v2c = np.zeros((m, n), dtype=float)\n        c2v = np.zeros((m, n),\
+      \ dtype=float)\n        for row, variables in enumerate(self.check_vars):\n            v2c[row,\
+      \ variables] = llr[variables]\n\n        hard = np.zeros(n, dtype=np.uint8)\n        elapsed_start\
+      \ = time.perf_counter_ns()\n        for iteration in range(1, max_iters + 1):\n           \
+      \ for row, variables in enumerate(self.check_vars):\n                values = v2c[row, variables]\n\
+      \                signs = np.where(values >= 0, 1.0, -1.0)\n                magnitudes = np.abs(values)\n\
+      \                first = int(np.argmin(magnitudes))\n                min1 = magnitudes[first]\n\
+      \                temp = magnitudes.copy()\n                temp[first] = np.inf\n         \
+      \       min2 = np.min(temp)\n                sign_product = np.prod(signs)\n              \
+      \  for pos, variable in enumerate(variables):\n                    magnitude = min2 if pos\
+      \ == first else min1\n                    c2v[row, variable] = (\n                        alpha\
+      \ * sign_product * signs[pos] * magnitude\n                    )\n            if self.quant_bits:\n\
+      \                c2v = self._quantize(c2v)\n\n            posterior = llr.copy()\n        \
+      \    for variable, checks in enumerate(self.var_checks):\n                if len(checks) ==\
+      \ 0:\n                    continue\n                posterior[variable] += np.sum(c2v[checks,\
+      \ variable])\n                for check in checks:\n                    v2c[check, variable]\
+      \ = posterior[variable] - c2v[check, variable]\n            if self.quant_bits:\n         \
+      \       v2c = self._quantize(v2c)\n                posterior = self._quantize(posterior)\n\n\
+      \            hard = (posterior < 0).astype(np.uint8)\n            if early_stop and not np.any((self.H\
+      \ @ hard) & 1):\n                break\n\n        microseconds = (time.perf_counter_ns() -\
+      \ elapsed_start) / 1000.0\n        return hard, iteration, microseconds\n\n    def _decode_pair(self,\
+      \ llr, max_iters):\n        \"\"\"Two independent decoders get an identical initial LLR vector.\"\
+      \"\"\n        fixed_word, fixed_iter, fixed_us = self._decode(llr, max_iters, False)\n    \
+      \    adaptive_word, adaptive_iter, adaptive_us = self._decode(llr, max_iters, True)\n     \
+      \   return fixed_word, adaptive_word, fixed_iter, adaptive_iter, fixed_us, adaptive_us\n\n\
+      \    # ------------------------------------------------------------------\n    # Modulation\
+      \ and channel\n    # ------------------------------------------------------------------\n\n\
+      \    @staticmethod\n    def _qpsk_mod(bits):\n        if len(bits) % 2:\n            bits =\
+      \ np.r_[bits, 0]\n\n        i = 1.0 - 2.0 * bits[0::2].astype(float)\n        q = 1.0 - 2.0\
+      \ * bits[1::2].astype(float)\n        return (i + 1j * q) / np.sqrt(2.0)\n\n    def _ofdm_tx(self,\
+      \ symbols):\n        carriers = len(self.active)\n        blocks = int(np.ceil(len(symbols)\
+      \ / carriers))\n\n        padded = np.zeros(blocks * carriers, dtype=complex)\n        padded[:len(symbols)]\
+      \ = symbols\n\n        waveform = []\n\n        if self.csi_mode == \"pilot_ls\":\n       \
+      \     # One OFDM training symbol with known QPSK phase on active carriers.\n            pilot_X\
+      \ = np.zeros(self.nfft, dtype=complex)\n            pilot_X[self.active] = (1.0 + 1.0j) / np.sqrt(2.0)\n\
+      \            pilot = np.fft.ifft(pilot_X) * np.sqrt(self.nfft)\n            waveform.append(np.r_[pilot[-self.cp:],\
+      \ pilot])\n\n        for block in range(blocks):\n            X = np.zeros(self.nfft, dtype=complex)\n\
+      \            start = block * carriers\n            stop = (block + 1) * carriers\n        \
+      \    X[self.active] = padded[start:stop]\n\n            x = np.fft.ifft(X) * np.sqrt(self.nfft)\n\
+      \            waveform.append(np.r_[x[-self.cp:], x])\n\n        return np.concatenate(waveform),\
+      \ blocks, len(symbols)\n\n    def _channel_taps(self):\n        power = 0.65 ** np.arange(6)\n\
+      \        power = power / np.sum(power)\n\n        taps = (\n            self.rng.normal(size=6)\n\
+      \            + 1j * self.rng.normal(size=6)\n        ) * np.sqrt(power / 2.0)\n\n        return\
+      \ taps\n\n    def _impair(self, tx, channel, snr_db, jsr_db):\n        faded = np.convolve(tx,\
+      \ channel)[:len(tx)]\n        signal_power = np.mean(np.abs(faded) ** 2)\n\n        noise_power\
+      \ = signal_power / (10.0 ** (snr_db / 10.0))\n        noise = np.sqrt(noise_power / 2.0) *\
+      \ (\n            self.rng.normal(size=len(faded))\n            + 1j * self.rng.normal(size=len(faded))\n\
+      \        )\n\n        jammer_power = signal_power * (10.0 ** (jsr_db / 10.0))\n        n =\
+      \ np.arange(len(faded))\n        jammer = np.sqrt(jammer_power) * np.exp(\n            1j *\
+      \ 2.0 * np.pi * self.interferer_bin * n / self.nfft\n        )\n\n        return faded + noise\
+      \ + jammer, noise_power\n\n    # ------------------------------------------------------------------\n\
+      \    # OFDM receiver\n    # ------------------------------------------------------------------\n\
+      \n    def _ofdm_rx(\n        self,\n        received,\n        channel,\n        blocks,\n\
+      \        number_of_symbols,\n        noise_power,\n    ):\n        H = np.fft.fft(\n      \
+      \      np.r_[channel, np.zeros(self.nfft - len(channel))]\n        )\n        pilot_offset\
+      \ = 0\n        if self.csi_mode == \"pilot_ls\":\n            # One full-band, known training\
+      \ OFDM symbol per frame.\n            pilot_raw = received[self.cp:self.cp + self.nfft]\n \
+      \           pilot_fft = np.fft.fft(pilot_raw) / np.sqrt(self.nfft)\n            pilot_value\
+      \ = (1.0 + 1.0j) / np.sqrt(2.0)\n            H = np.zeros(self.nfft, dtype=complex)\n     \
+      \       H[self.active] = pilot_fft[self.active] / pilot_value\n            pilot_offset = self.nfft\
+      \ + self.cp\n\n        symbols = []\n        variances = []\n        block_len = self.nfft\
+      \ + self.cp\n\n        for block in range(blocks):\n            start = pilot_offset + block\
+      \ * block_len\n            stop = start + block_len\n\n            y = received[start:stop]\n\
+      \            Y = np.fft.fft(y[self.cp:]) / np.sqrt(self.nfft)\n\n            H_active = H[self.active]\n\
+      \            z = Y[self.active] / (H_active + 1e-12)\n\n            symbols.extend(z)\n   \
+      \         variances.extend(\n                noise_power / (np.abs(H_active) ** 2 + 1e-12)\n\
+      \            )\n\n        z = np.asarray(symbols[:number_of_symbols])\n        variance = np.asarray(variances[:number_of_symbols])\n\
+      \n        llr = np.empty(2 * len(z), dtype=float)\n        llr[0::2] = 2.0 * np.sqrt(2.0) *\
+      \ z.real / variance\n        llr[1::2] = 2.0 * np.sqrt(2.0) * z.imag / variance\n\n       \
+      \ return z, llr\n\n    # ------------------------------------------------------------------\n\
+      \    # Statistics and logging\n    # ------------------------------------------------------------------\n\
+      \n    def _reset_stats(self):\n        n = max(10, self.window_frames)\n\n        self.be_fixed\
+      \ = deque(maxlen=n)\n        self.be_adaptive = deque(maxlen=n)\n        self.fe_fixed = deque(maxlen=n)\n\
+      \        self.fe_adaptive = deque(maxlen=n)\n        self.iter_fixed = deque(maxlen=n)\n  \
+      \      self.iter_adaptive = deque(maxlen=n)\n\n        self._frame_count = 0\n\n    def _metrics(self):\n\
+      \        frames = max(1, len(self.be_fixed))\n        bits = frames * self.k_info\n\n     \
+      \   ber_fixed = sum(self.be_fixed) / bits\n        ber_adaptive = sum(self.be_adaptive) / bits\n\
+      \        fer_fixed = sum(self.fe_fixed) / frames\n        fer_adaptive = sum(self.fe_adaptive)\
+      \ / frames\n\n        iter_fixed = sum(self.iter_fixed) / frames\n        iter_adaptive = sum(self.iter_adaptive)\
+      \ / frames\n\n        work_fixed = iter_fixed * self.m_checks / self.k_info\n        work_adaptive\
+      \ = iter_adaptive * self.m_checks / self.k_info\n        saving = 100.0 * (1.0 - work_adaptive\
+      \ / max(work_fixed, 1e-12))\n\n        return (\n            ber_fixed,\n            ber_adaptive,\n\
+      \            fer_fixed,\n            fer_adaptive,\n            iter_fixed,\n            iter_adaptive,\n\
+      \            work_fixed,\n            work_adaptive,\n            saving,\n            float(self._frame_count),\n\
+      \        )\n\n    def _init_csv(self):\n        with self.csv_path.open(\"w\", newline=\"\"\
+      ) as file:\n            writer = csv.writer(file)\n            writer.writerow([\n        \
+      \        \"experiment\",\n                \"time_unix\",\n                \"snr_db\",\n   \
+      \             \"jsr_db\",\n                \"code_rate\",\n                \"max_iters\",\n\
+      \                \"frame\",\n                \"bit_errors_fixed\",\n                \"bit_errors_adaptive\"\
+      ,\n                \"frame_error_fixed\",\n                \"frame_error_adaptive\",\n    \
+      \            \"iterations_fixed\",\n                \"iterations_adaptive\",\n            \
+      \    \"decoder_work_fixed\",\n                \"decoder_work_adaptive\",\n                \"\
+      decoder_time_fixed_us\",\n                \"decoder_time_adaptive_us\",\n                \"\
+      edge_updates_fixed\",\n                \"edge_updates_adaptive\",\n                \"syndrome_checks_adaptive\"\
+      ,\n                \"csi_mode\",\n                \"code_family\",\n                \"quant_bits\"\
+      ,\n                \"seed\",\n            ])\n\n    def _log_frame(\n        self,\n      \
+      \  experiment,\n        snr,\n        jsr,\n        max_iters,\n        errors_fixed,\n   \
+      \     errors_adaptive,\n        fixed_iterations,\n        adaptive_iterations,\n        fixed_us,\n\
+      \        adaptive_us,\n    ):\n        work_fixed = fixed_iterations * self.m_checks / self.k_info\n\
+      \        work_adaptive = adaptive_iterations * self.m_checks / self.k_info\n\n        with\
+      \ self.csv_path.open(\"a\", newline=\"\") as file:\n            writer = csv.writer(file)\n\
+      \            writer.writerow([\n                experiment,\n                f\"{time.time():.6f}\"\
+      ,\n                f\"{snr:.3f}\",\n                f\"{jsr:.3f}\",\n                f\"{self.code_rate:.6f}\"\
+      ,\n                max_iters,\n                self._frame_count,\n                errors_fixed,\n\
+      \                errors_adaptive,\n                int(errors_fixed > 0),\n               \
+      \ int(errors_adaptive > 0),\n                fixed_iterations,\n                adaptive_iterations,\n\
+      \                f\"{work_fixed:.6f}\",\n                f\"{work_adaptive:.6f}\",\n      \
+      \          f\"{fixed_us:.3f}\",\n                f\"{adaptive_us:.3f}\",\n                2\
+      \ * self.edge_count * fixed_iterations,\n                2 * self.edge_count * adaptive_iterations,\n\
+      \                adaptive_iterations,\n                self.csi_mode,\n                self.code_family,\n\
+      \                self.quant_bits,\n                self.seed,\n            ])\n\n    @staticmethod\n\
+      \    def _repeat_into(output, data):\n        data = np.asarray(data)\n\n        if len(data)\
+      \ == 0:\n            output[:] = 0\n        else:\n            output[:] = np.resize(data,\
+      \ len(output)).astype(\n                output.dtype,\n                copy=False,\n      \
+      \      )\n\n    def simulate_frame(self, experiment, snr, jsr, rate, max_iters):\n        \"\
+      \"\"Run one independent simulated frame; GUI and headless share this.\"\"\"\n        self._apply_settings(snr,\
+      \ jsr, rate, max_iters)\n        information_bits = self.rng.integers(0, 2, self.k_info, dtype=np.uint8)\n\
+      \        coded_bits = self._encode(information_bits)\n        tx_symbols = self._qpsk_mod(coded_bits)\n\
+      \        tx_waveform, blocks, symbol_count = self._ofdm_tx(tx_symbols)\n        channel = self._channel_taps()\n\
+      \        received_waveform, noise_power = self._impair(tx_waveform, channel, snr, jsr)\n  \
+      \      received_symbols, llr = self._ofdm_rx(\n            received_waveform, channel, blocks,\
+      \ symbol_count, noise_power\n        )\n        llr = llr[:len(coded_bits)]\n        (fixed_codeword,\
+      \ adaptive_codeword, fixed_iterations,\n         adaptive_iterations, fixed_us, adaptive_us)\
+      \ = self._decode_pair(llr, max_iters)\n\n        fixed_errors = int(np.count_nonzero(\n   \
+      \         fixed_codeword[:self.k_info] != information_bits\n        ))\n        adaptive_errors\
+      \ = int(np.count_nonzero(\n            adaptive_codeword[:self.k_info] != information_bits\n\
+      \        ))\n        self.be_fixed.append(fixed_errors)\n        self.be_adaptive.append(adaptive_errors)\n\
+      \        self.fe_fixed.append(int(fixed_errors > 0))\n        self.fe_adaptive.append(int(adaptive_errors\
+      \ > 0))\n        self.iter_fixed.append(fixed_iterations)\n        self.iter_adaptive.append(adaptive_iterations)\n\
+      \        self._frame_count += 1\n        self._log_frame(\n            experiment, snr, jsr,\
+      \ max_iters, fixed_errors, adaptive_errors,\n            fixed_iterations, adaptive_iterations,\
+      \ fixed_us, adaptive_us\n        )\n        if experiment == \"representative\":\n        \
+      \    self.rep_tx.append(tx_symbols.copy())\n            self.rep_rx.append(received_symbols.copy())\n\
+      \            self.rep_waveform.append(received_waveform.copy())\n\n        return tx_symbols,\
+      \ received_symbols, received_waveform, self._metrics()\n\n    # ------------------------------------------------------------------\n\
+      \    # GNU Radio work function\n    # ------------------------------------------------------------------\n\
+      \n    def work(self, input_items, output_items):\n        if self.report_done:\n          \
+      \  # Keep last GUI results visible rather than clearing plots to zero.\n            if self.last_outputs\
+      \ is not None:\n                for i in range(3):\n                    self._repeat_into(output_items[i],\
+      \ self.last_outputs[i])\n                for port, value in enumerate(self.last_metrics, start=3):\n\
+      \                    output_items[port][:] = np.float32(value)\n            else:\n       \
+      \         for output in output_items:\n                    output[:] = 0\n            time.sleep(0.05)\n\
+      \            return len(output_items[0])\n\n        experiment, snr, jsr, rate, max_iters =\
+      \ self._current_settings()\n        tx, rx, waveform, metrics = self.simulate_frame(\n    \
+      \        experiment, snr, jsr, rate, max_iters\n        )\n        self.last_outputs = (tx,\
+      \ rx, waveform)\n        self.last_metrics = metrics\n        self._repeat_into(output_items[0],\
+      \ tx)\n        self._repeat_into(output_items[1], rx)\n        self._repeat_into(output_items[2],\
+      \ waveform)\n        for port, value in enumerate(metrics, start=3):\n            output_items[port][:]\
+      \ = np.float32(value)\n        self._advance_report()\n        if not self.report_mode:\n \
+      \           time.sleep(0.05)\n        return len(output_items[0])\n"
+    affinity: ''
+    alias: ''
+    comment: ''
+    extended_report: 'True'
+    frames_per_point: '1000'
+    jsr_db: jsr_db
+    max_iters: max_iters
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    rate_sel: rate_sel
+    report_mode: 'True'
+    seed: '2026'
+    snr_db: snr_db
+    window_frames: '1000'
+    csi_mode: '"perfect"'
+    code_family: '"random_eira"'
+    quant_bits: '0'
+    run_label: '"gnuradio"'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 160
+    - 280.0
+    rotation: 0
+    state: enabled
+- name: qtgui_const_sink_x_0
+  id: qtgui_const_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    axislabels: 'True'
+    color1: '"blue"'
+    color10: '"dark blue"'
+    color2: '"red"'
+    color3: '"green"'
+    color4: '"black"'
+    color5: '"cyan"'
+    color6: '"magenta"'
+    color7: '"yellow"'
+    color8: '"dark red"'
+    color9: '"dark green"'
+    comment: ''
+    grid: 'True'
+    gui_hint: 1,0,2,2
+    label1: Ideal TX QPSK
+    label10: ''
+    label2: Equalized RX
+    label3: ''
+    label4: ''
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    legend: 'True'
+    marker1: '0'
+    marker10: '0'
+    marker2: '0'
+    marker3: '0'
+    marker4: '0'
+    marker5: '0'
+    marker6: '0'
+    marker7: '0'
+    marker8: '0'
+    marker9: '0'
+    name: TX vs Equalized RX Constellation
+    nconnections: '2'
+    size: '1024'
+    style1: '0'
+    style10: '0'
+    style2: '0'
+    style3: '0'
+    style4: '0'
+    style5: '0'
+    style6: '0'
+    style7: '0'
+    style8: '0'
+    style9: '0'
+    tr_chan: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.20'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    xmax: '2.5'
+    xmin: '-2.5'
+    ymax: '2'
+    ymin: '-2.5'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 560
+    - 344.0
+    rotation: 0
+    state: enabled
+- name: qtgui_freq_sink_x_0
+  id: qtgui_freq_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    average: '0.2'
+    axislabels: 'True'
+    bw: samp_rate
+    color1: '"blue"'
+    color10: '"dark blue"'
+    color2: '"red"'
+    color3: '"green"'
+    color4: '"black"'
+    color5: '"cyan"'
+    color6: '"magenta"'
+    color7: '"yellow"'
+    color8: '"dark red"'
+    color9: '"dark green"'
+    comment: ''
+    ctrlpanel: 'False'
+    fc: '0'
+    fftsize: '1024'
+    freqhalf: 'True'
+    grid: 'True'
+    gui_hint: 1,2,2,2
+    label: Relative Gain
+    label1: ''
+    label10: ''''''
+    label2: ''''''
+    label3: ''''''
+    label4: ''''''
+    label5: ''''''
+    label6: ''''''
+    label7: ''''''
+    label8: ''''''
+    label9: ''''''
+    legend: 'True'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: Received OFDM Spectrum with Narrowband Interference
+    nconnections: '1'
+    norm_window: 'False'
+    showports: 'False'
+    tr_chan: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_tag: '""'
+    type: complex
+    units: dB
+    update_time: '0.20'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    wintype: window.WIN_BLACKMAN_hARRIS
+    ymax: '20'
+    ymin: '-80'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 800
+    - 264.0
+    rotation: 0
+    state: enabled
+- name: qtgui_number_sink_0
+  id: qtgui_number_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    autoscale: 'True'
+    avg: '0'
+    color1: ("black", "black")
+    color10: ("black", "black")
+    color2: ("black", "black")
+    color3: ("black", "black")
+    color4: ("black", "black")
+    color5: ("blue", "red")
+    color6: ("black", "black")
+    color7: ("black", "black")
+    color8: ("black", "black")
+    color9: ("black", "black")
+    comment: ''
+    factor1: '1'
+    factor10: '1'
+    factor2: '1'
+    factor3: '1'
+    factor4: '1'
+    factor5: '1'
+    factor6: '1'
+    factor7: '1'
+    factor8: '1'
+    factor9: '1'
+    graph_type: qtgui.NUM_GRAPH_NONE
+    gui_hint: 3,2,2,2
+    label1: Fixed BER
+    label10: Frames
+    label2: Adaptive BER
+    label3: Fixed FER
+    label4: Adaptive FER
+    label5: Fixed Avg Iterations
+    label6: Adaptive Avg Iterations
+    label7: Fixed Decoder work
+    label8: Adaptive Decoder work
+    label9: Decoder work saved
+    max: '1'
+    min: '-1'
+    name: LDPC Receiver performance
+    nconnections: '10'
+    type: float
+    unit1: ''
+    unit10: ''
+    unit2: ''
+    unit3: ''
+    unit4: ''
+    unit5: ''
+    unit6: ''
+    unit7: ''
+    unit8: ''
+    unit9: ''
+    update_time: '0.25'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 768
+    - 440.0
+    rotation: 0
+    state: enabled
+- name: qtgui_waterfall_sink_x_0
+  id: qtgui_waterfall_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    axislabels: 'True'
+    bw: samp_rate
+    color1: '0'
+    color10: '0'
+    color2: '0'
+    color3: '0'
+    color4: '0'
+    color5: '0'
+    color6: '0'
+    color7: '0'
+    color8: '0'
+    color9: '0'
+    comment: ''
+    fc: '0'
+    fftsize: '1024'
+    freqhalf: 'True'
+    grid: 'True'
+    gui_hint: 3,0,2,2
+    int_max: '20'
+    int_min: '-80'
+    label1: ''
+    label10: ''
+    label2: ''
+    label3: ''
+    label4: ''
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    legend: 'True'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: Received OFDM waterfall
+    nconnections: '1'
+    showports: 'False'
+    type: complex
+    update_time: '0.20'
+    wintype: window.WIN_BLACKMAN_hARRIS
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 528
+    - 184.0
+    rotation: 0
+    state: enabled
+connections:
+- - epy_block_0
+  - '0'
+  - qtgui_const_sink_x_0
+  - '0'
+- - epy_block_0
+  - '1'
+  - qtgui_const_sink_x_0
+  - '1'
+- - epy_block_0
+  - '10'
+  - qtgui_number_sink_0
+  - '7'
+- - epy_block_0
+  - '11'
+  - qtgui_number_sink_0
+  - '8'
+- - epy_block_0
+  - '12'
+  - qtgui_number_sink_0
+  - '9'
+- - epy_block_0
+  - '2'
+  - qtgui_freq_sink_x_0
+  - '0'
+- - epy_block_0
+  - '2'
+  - qtgui_waterfall_sink_x_0
+  - '0'
+- - epy_block_0
+  - '3'
+  - qtgui_number_sink_0
+  - '0'
+- - epy_block_0
+  - '4'
+  - qtgui_number_sink_0
+  - '1'
+- - epy_block_0
+  - '5'
+  - qtgui_number_sink_0
+  - '2'
+- - epy_block_0
+  - '6'
+  - qtgui_number_sink_0
+  - '3'
+- - epy_block_0
+  - '7'
+  - qtgui_number_sink_0
+  - '4'
+- - epy_block_0
+  - '8'
+  - qtgui_number_sink_0
+  - '5'
+- - epy_block_0
+  - '9'
+  - qtgui_number_sink_0
+  - '6'
+metadata:
+  file_format: 1
+  grc_version: 3.10.9.2
